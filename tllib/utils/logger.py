@@ -49,11 +49,13 @@ class CompleteLogger:
         self.phase = phase
         self.visualize_directory = os.path.join(self.root, "visualize")
         self.checkpoint_directory = os.path.join(self.root, "checkpoints")
+        self.reports_directory = os.path.join(self.root, "reports")
         self.epoch = 0
 
         os.makedirs(self.root, exist_ok=True)
         os.makedirs(self.visualize_directory, exist_ok=True)
         os.makedirs(self.checkpoint_directory, exist_ok=True)
+        os.makedirs(self.reports_directory, exist_ok=True)
 
         # redirect std out
         now = time.strftime("%Y-%m-%d-%H_%M_%S", time.localtime(time.time()))

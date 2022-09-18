@@ -133,3 +133,9 @@ examples/domain_adaptation/digits/logs/*
 examples/domain_adaptation/digits/data/*
 +.DS_Store
 */.DS_Store
+
+# custom paths
+examples/domain_adaptation/image_classification/data/wbc/WBC1
+examples/domain_adaptation/image_classification/data/wbc/Acevedo_20
+examples/domain_adaptation/image_classification/data/wbc/Matek_19
+logs

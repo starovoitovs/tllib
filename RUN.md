@@ -6,13 +6,14 @@ Create symbolic links to the datasets:
 
 Run this command from the root of `tlda`:
 
-    CUDA_VISIBLE_DEVICES=0 python examples/domain_adaptation/image_classification/dann.py examples/domain_adaptation/image_classification/data/wbc -d WBC -s A -t M -a resnet18 --epochs 20 --seed 1 --log logs/dann/WBC_A2M
+    python examples/domain_adaptation/image_classification/dann.py examples/domain_adaptation/image_classification/data/wbc -d WBC -s A M -t W -a resnet18 --epochs 20 --seed 1 --train-resizing=crop.resize --val-resizing=crop.resize --scale 0.8 1.0 --ratio 0.8 1.2 --log logs/dann/WBC_AM2W
 
 Arguments `-s` and `-t` specify source and target dataset:
 
 * A = Acevedo_20
 * M = Matek_19
-* B = both Acevedo_20 and Matek_19
 * W = WBC1
+
+You can specify several letters (for example `A M` for Acevedo_20 and Matek_19).
 
 Don't forget to put the root of `tlda` in the `PYTHONPATH` so the `tllib` can be imported.

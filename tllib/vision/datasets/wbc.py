@@ -9,13 +9,21 @@ from ._util import download as download_data, check_exits
 
 
 class WBC(ImageList):
+
     image_list = {
         "A": "image_list/ace.txt",
         "M": "image_list/mat.txt",
-        "W": "image_list/wbc.txt"
+        "W": "image_list/wbc.txt",
     }
+
     CLASSES = ['basophil', 'eosinophil', 'erythroblast', 'myeloblast', 'promyelocyte', 'myelocyte', 'metamyelocyte',
                'neutrophil_banded', 'neutrophil_segmented', 'monocyte', 'lymphocyte_typical']
+
+    crop_sizes = {
+        'A': 250,
+        'M': 345,
+        'W': 288,
+    }
 
     def __init__(self, root: str, task: str, **kwargs):
         assert task in self.image_list

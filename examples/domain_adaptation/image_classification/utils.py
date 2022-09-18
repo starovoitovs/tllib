@@ -3,14 +3,18 @@
 @contact: JiangJunguang1123@outlook.com, cbx_99_hasta@outlook.com
 """
 import sys
+import os
 import os.path as osp
 import time
+import pandas as pd
 from PIL import Image
 
+import matplotlib.pyplot as plt
 import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 import torchvision.transforms as T
 from timm.data.auto_augment import auto_augment_transform, rand_augment_transform
 
@@ -22,6 +26,8 @@ from tllib.utils.metric import accuracy, ConfusionMatrix
 from tllib.utils.meter import AverageMeter, ProgressMeter
 from tllib.vision.datasets.imagelist import MultipleDomainsDataset
 
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, plot_confusion_matrix, matthews_corrcoef, classification_report,confusion_matrix, accuracy_score, balanced_accuracy_score, cohen_kappa_score, f1_score,  precision_score, recall_score
 
 def get_model_names():
     return sorted(
@@ -97,7 +103,8 @@ def validate(val_loader, model, args, device):
     else:
         confmat = None
 
-    outputs = torch.empty((0,))
+    y_pred = torch.empty((0,))
+    y_true = torch.empty((0,))
 
     with torch.no_grad():
         end = time.time()
@@ -111,7 +118,8 @@ def validate(val_loader, model, args, device):
             output = model(images)
             loss = F.cross_entropy(output, target)
 
-            outputs = torch.cat([outputs, output.cpu()])
+            y_pred = torch.cat([y_pred, output.cpu()])
+            y_true = torch.cat([y_true, target.cpu()])
 
             # measure accuracy and record loss
             acc1, = accuracy(output, target, topk=(1,))
@@ -131,7 +139,7 @@ def validate(val_loader, model, args, device):
         if confmat:
             print(confmat.format(args.class_names))
 
-    return top1.avg, outputs
+    return top1.avg, y_pred, y_true
 
 
 def get_train_transform(resizing='default', scale=(0.08, 1.0), ratio=(3. / 4., 4. / 3.), random_horizontal_flip=True,
@@ -267,3 +275,101 @@ def empirical_risk_minimization(train_source_iter, model, optimizer, lr_schedule
 
         if i % args.print_freq == 0:
             progress.display(i)
+
+
+def load_datasets(args):
+
+    crop_sizes = datasets.__dict__[args.data].crop_sizes
+
+    # Data loading code
+    train_source_transforms = [get_train_transform(args.train_resizing, scale=args.scale, ratio=args.ratio,
+                                                   random_horizontal_flip=not args.no_hflip,
+                                                   random_color_jitter=False, resize_size=args.resize_size,
+                                                   norm_mean=args.norm_mean, norm_std=args.norm_std,
+                                                   crop_size=crop_sizes[source]) for source in args.source]
+
+    train_target_transforms = [get_train_transform(args.train_resizing, scale=args.scale, ratio=args.ratio,
+                                                   random_horizontal_flip=not args.no_hflip,
+                                                   random_color_jitter=False, resize_size=args.resize_size,
+                                                   norm_mean=args.norm_mean, norm_std=args.norm_std,
+                                                   crop_size=crop_sizes[target]) for target in args.target]
+
+    val_transforms = [get_val_transform(args.val_resizing, resize_size=args.resize_size,
+                                        norm_mean=args.norm_mean, norm_std=args.norm_std,
+                                        crop_size=crop_sizes[target]) for target in args.target]
+
+    print("train_source_transforms: ", train_source_transforms)
+    print("train_target_transforms: ", train_target_transforms)
+    print("val_transforms: ", val_transforms)
+
+    train_source_dataset, train_target_dataset, val_dataset, test_dataset, num_classes, args.class_names = \
+        get_dataset(args.data, args.root, args.source, args.target,
+                    train_source_transforms=train_source_transforms,
+                    val_transforms=val_transforms,
+                    train_target_transforms=train_target_transforms)
+
+    train_source_loader = DataLoader(train_source_dataset, batch_size=args.batch_size,
+                                     shuffle=True, num_workers=args.workers, drop_last=True)
+    train_target_loader = DataLoader(train_target_dataset, batch_size=args.batch_size,
+                                     shuffle=True, num_workers=args.workers, drop_last=True)
+
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+
+    return num_classes, test_loader, train_source_loader, train_target_loader, val_loader
+
+
+def classification_complete_report(y_true, y_pred, directory, labels=None):
+
+    output = ""
+    output += classification_report(y_true, y_pred, labels=None) + "\n"
+    output += 15 * "----" + "\n"
+    output += "Matthews correlation coeff: %.4f" % (matthews_corrcoef(y_true, y_pred)) + "\n"
+    output += "Cohen Kappa score:          %.4f" % (cohen_kappa_score(y_true, y_pred)) + "\n"
+    output += "Accuracy:                   %.4f" % (accuracy_score(y_true, y_pred)) + "\n"
+    output += "Balanced accuracy:          %.4f" % (balanced_accuracy_score(y_true, y_pred)) + "\n"
+    output += 15 * "----" + "\n"
+    output += "              macro    micro" + "\n"
+    output += "Precision:   %.4f   %.4f" % (
+    precision_score(y_true, y_pred, average="macro"), precision_score(y_true, y_pred, average="micro")) + "\n"
+    output += "Recall:      %.4f   %.4f" % (
+    recall_score(y_true, y_pred, average="macro"), recall_score(y_true, y_pred, average="micro")) + "\n"
+    output += "F1:          %.4f   %.4f" % (
+    f1_score(y_true, y_pred, average="macro"), f1_score(y_true, y_pred, average="micro")) + "\n"
+    print(output)
+
+    with open(os.path.join(directory, "report.txt"), "w") as f:
+        f.write(output)
+        f.close()
+
+    cm = confusion_matrix(y_true, y_pred, labels=labels, normalize='true')
+    fig, ax = plt.subplots(figsize=(10, 10))  # plot size
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+    disp.plot(cmap=plt.cm.Blues, xticks_rotation='vertical', ax=ax, include_values=False, colorbar=False)
+
+    fig.savefig(os.path.join(directory, 'confusion_matrix.png'))
+
+
+def report(args, device, classifier, directory, test_loader, train_source_loader):
+
+    labels = datasets.__dict__[args.data].CLASSES
+
+    # save predictions for the test dataset
+    acc1, y_pred, y_true = validate(test_loader, classifier, args, device)
+    y_pred = torch.argmax(torch.softmax(y_pred, dim=1), 1).numpy()
+
+    df = pd.read_csv(os.path.join(args.root, 'image_list/wbc.txt'), sep=' ', header=None, names=['Image', 'LabelID'])
+    df['Image'] = df['Image'].apply(lambda x: x[14:])
+    df['LabelID'] = y_pred
+    df['Label'] = df['LabelID'].apply(lambda x: labels[x])
+    df.to_csv(os.path.join(directory, 'predictions.csv'))
+
+    # @todo classification report separate for ace and mat
+    # generate classification report for the training set
+    acc1, y_pred, y_true = validate(train_source_loader, classifier, args, device)
+    y_pred = torch.argmax(torch.softmax(y_pred, dim=1), 1).numpy()
+    y_true = [labels[int(x)] for x in y_true.numpy()]
+    y_pred = [labels[x] for x in y_pred]
+    classification_complete_report(y_true, y_pred, directory, labels=labels)
+
+    return acc1
