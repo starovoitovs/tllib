@@ -54,24 +54,24 @@ def get_dataset_names():
     ) + ['Digits']
 
 
-def get_dataset(dataset_name, root, source, target, train_source_transform, val_transform, train_target_transform=None):
-
-    if train_target_transform is None:
-        train_target_transform = train_source_transform
+def get_dataset(dataset_name, root, source, target, train_source_transforms, val_transforms,
+                train_target_transforms=None):
+    if train_target_transforms is None:
+        train_target_transforms = train_source_transforms
 
     # load datasets from tllib.vision.datasets
     dataset = datasets.__dict__[dataset_name]
 
-    def concat_dataset(tasks, start_idx, **kwargs):
+    def concat_dataset(tasks, start_idx, transforms, **kwargs):
         # return ConcatDataset([dataset(task=task, **kwargs) for task in tasks])
-        return MultipleDomainsDataset([dataset(task=task, **kwargs) for task in tasks], tasks,
-                                      domain_ids=list(range(start_idx, start_idx + len(tasks))))
+        domains = [dataset(task=task, transform=transform, **kwargs) for task, transform in zip(tasks, transforms)]
+        return MultipleDomainsDataset(domains, tasks, domain_ids=list(range(start_idx, start_idx + len(tasks))))
 
-    train_source_dataset = concat_dataset(root=root, tasks=source, transform=train_source_transform,
+    train_source_dataset = concat_dataset(root=root, tasks=source, transforms=train_source_transforms,
                                           start_idx=0)
-    train_target_dataset = concat_dataset(root=root, tasks=target, transform=train_target_transform,
+    train_target_dataset = concat_dataset(root=root, tasks=target, transforms=train_target_transforms,
                                           start_idx=len(source))
-    val_dataset = concat_dataset(root=root, tasks=target, transform=val_transform,
+    val_dataset = concat_dataset(root=root, tasks=target, transforms=val_transforms,
                                  start_idx=len(source))
     test_dataset = val_dataset
 
@@ -81,7 +81,7 @@ def get_dataset(dataset_name, root, source, target, train_source_transform, val_
     return train_source_dataset, train_target_dataset, val_dataset, test_dataset, num_classes, class_names
 
 
-def validate(val_loader, model, args, device) -> float:
+def validate(val_loader, model, args, device):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -97,9 +97,12 @@ def validate(val_loader, model, args, device) -> float:
     else:
         confmat = None
 
+    outputs = torch.empty((0,))
+
     with torch.no_grad():
         end = time.time()
         for i, data in enumerate(val_loader):
+
             images, target = data[:2]
             images = images.to(device)
             target = target.to(device)
@@ -107,6 +110,8 @@ def validate(val_loader, model, args, device) -> float:
             # compute output
             output = model(images)
             loss = F.cross_entropy(output, target)
+
+            outputs = torch.cat([outputs, output.cpu()])
 
             # measure accuracy and record loss
             acc1, = accuracy(output, target, topk=(1,))
@@ -126,12 +131,12 @@ def validate(val_loader, model, args, device) -> float:
         if confmat:
             print(confmat.format(args.class_names))
 
-    return top1.avg
+    return top1.avg, outputs
 
 
 def get_train_transform(resizing='default', scale=(0.08, 1.0), ratio=(3. / 4., 4. / 3.), random_horizontal_flip=True,
                         random_color_jitter=False, resize_size=224, norm_mean=(0.485, 0.456, 0.406),
-                        norm_std=(0.229, 0.224, 0.225), auto_augment=None):
+                        norm_std=(0.229, 0.224, 0.225), auto_augment=None, crop_size=None, random_vertical_flip=True):
     """
     resizing mode:
         - default: resize the image to 256 and take a random resized crop of size 224;
@@ -154,6 +159,11 @@ def get_train_transform(resizing='default', scale=(0.08, 1.0), ratio=(3. / 4., 4
             ResizeImage(256),
             T.RandomCrop(224)
         ])
+    elif resizing == 'crop.resize':
+        transform = T.Compose([
+            T.CenterCrop(crop_size),
+            T.RandomResizedCrop(224, scale=scale, ratio=ratio),
+        ])
     elif resizing == 'res.':
         transform = ResizeImage(resize_size)
         transformed_img_size = resize_size
@@ -162,6 +172,8 @@ def get_train_transform(resizing='default', scale=(0.08, 1.0), ratio=(3. / 4., 4
     transforms = [transform]
     if random_horizontal_flip:
         transforms.append(T.RandomHorizontalFlip())
+    if random_vertical_flip:
+        transforms.append(T.RandomVerticalFlip())
     if auto_augment:
         aa_params = dict(
             translate_const=int(transformed_img_size * 0.45),
@@ -182,7 +194,7 @@ def get_train_transform(resizing='default', scale=(0.08, 1.0), ratio=(3. / 4., 4
 
 
 def get_val_transform(resizing='default', resize_size=224,
-                      norm_mean=(0.485, 0.456, 0.406), norm_std=(0.229, 0.224, 0.225)):
+                      norm_mean=(0.485, 0.456, 0.406), norm_std=(0.229, 0.224, 0.225), crop_size=None):
     """
     resizing mode:
         - default: resize the image to 256 and take the center crop of size 224;
@@ -195,6 +207,11 @@ def get_val_transform(resizing='default', resize_size=224,
         ])
     elif resizing == 'res.':
         transform = ResizeImage(resize_size)
+    elif resizing == 'crop.resize':
+        transform = T.Compose([
+            T.CenterCrop(crop_size),
+            ResizeImage(224),
+        ])
     else:
         raise NotImplementedError(resizing)
     return T.Compose([
