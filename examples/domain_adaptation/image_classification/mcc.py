@@ -44,24 +44,7 @@ def main(args: argparse.Namespace):
 
     cudnn.benchmark = True
 
-    # Data loading code
-    train_transform = utils.get_train_transform(args.train_resizing, scale=args.scale, ratio=args.ratio,
-                                                random_horizontal_flip=not args.no_hflip,
-                                                random_color_jitter=False, resize_size=args.resize_size,
-                                                norm_mean=args.norm_mean, norm_std=args.norm_std)
-    val_transform = utils.get_val_transform(args.val_resizing, resize_size=args.resize_size,
-                                            norm_mean=args.norm_mean, norm_std=args.norm_std)
-    print("train_transform: ", train_transform)
-    print("val_transform: ", val_transform)
-
-    train_source_dataset, train_target_dataset, val_dataset, test_dataset, num_classes, args.class_names = \
-        utils.get_dataset(args.data, args.root, args.source, args.target, train_transform, val_transform)
-    train_source_loader = DataLoader(train_source_dataset, batch_size=args.batch_size,
-                                     shuffle=True, num_workers=args.workers, drop_last=True)
-    train_target_loader = DataLoader(train_target_dataset, batch_size=args.batch_size,
-                                     shuffle=True, num_workers=args.workers, drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    num_classes, test_loader, train_source_loader, train_target_loader, val_loader = utils.load_datasets(args)
 
     train_source_iter = ForeverDataIterator(train_source_loader)
     train_target_iter = ForeverDataIterator(train_target_loader)
@@ -102,7 +85,7 @@ def main(args: argparse.Namespace):
         return
 
     if args.phase == 'test':
-        acc1 = utils.validate(test_loader, classifier, args, device)
+        acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader)
         print(acc1)
         return
 
@@ -115,7 +98,7 @@ def main(args: argparse.Namespace):
               lr_scheduler, epoch, args)
 
         # evaluate on validation set
-        acc1 = utils.validate(val_loader, classifier, args, device)
+        acc1, y_pred, y_true = utils.validate(val_loader, classifier, args, device)
 
         # remember best acc@1 and save checkpoint
         torch.save(classifier.state_dict(), logger.get_checkpoint_path('latest'))
@@ -127,7 +110,7 @@ def main(args: argparse.Namespace):
 
     # evaluate on test set
     classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-    acc1 = utils.validate(test_loader, classifier, args, device)
+    acc1, y_pred, y_true = utils.validate(test_loader, classifier, args, device)
     print("test_acc1 = {:3.1f}".format(acc1))
 
     logger.close()
