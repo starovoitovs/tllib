@@ -8,6 +8,7 @@ import warnings
 import argparse
 import shutil
 import os.path as osp
+import os
 
 import torch
 import torch.nn as nn
@@ -30,6 +31,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def main(args: argparse.Namespace):
+
     logger = CompleteLogger(args.log, args.phase)
     print(args)
 
@@ -138,6 +140,7 @@ def main(args: argparse.Namespace):
 def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverDataIterator,
           model: ImageClassifier, domain_adv: DomainAdversarialLoss, optimizer: SGD,
           lr_scheduler: LambdaLR, epoch: int, args: argparse.Namespace):
+
     batch_time = AverageMeter('Time', ':5.2f')
     data_time = AverageMeter('Data', ':5.2f')
     losses = AverageMeter('Loss', ':6.2f')

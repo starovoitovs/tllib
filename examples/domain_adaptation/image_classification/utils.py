@@ -55,41 +55,29 @@ def get_dataset_names():
 
 
 def get_dataset(dataset_name, root, source, target, train_source_transform, val_transform, train_target_transform=None):
+
     if train_target_transform is None:
         train_target_transform = train_source_transform
-    if dataset_name == "Digits":
-        train_source_dataset = datasets.__dict__[source[0]](osp.join(root, source[0]), download=True,
-                                                            transform=train_source_transform)
-        train_target_dataset = datasets.__dict__[target[0]](osp.join(root, target[0]), download=True,
-                                                            transform=train_target_transform)
-        val_dataset = test_dataset = datasets.__dict__[target[0]](osp.join(root, target[0]), split='test',
-                                                                  download=True, transform=val_transform)
-        class_names = datasets.MNIST.get_classes()
-        num_classes = len(class_names)
-    elif dataset_name in datasets.__dict__:
-        # load datasets from tllib.vision.datasets
-        dataset = datasets.__dict__[dataset_name]
 
-        def concat_dataset(tasks, start_idx, **kwargs):
-            # return ConcatDataset([dataset(task=task, **kwargs) for task in tasks])
-            return MultipleDomainsDataset([dataset(task=task, **kwargs) for task in tasks], tasks,
-                                          domain_ids=list(range(start_idx, start_idx + len(tasks))))
+    # load datasets from tllib.vision.datasets
+    dataset = datasets.__dict__[dataset_name]
 
-        train_source_dataset = concat_dataset(root=root, tasks=source, download=True, transform=train_source_transform,
-                                              start_idx=0)
-        train_target_dataset = concat_dataset(root=root, tasks=target, download=True, transform=train_target_transform,
-                                              start_idx=len(source))
-        val_dataset = concat_dataset(root=root, tasks=target, download=True, transform=val_transform,
-                                     start_idx=len(source))
-        if dataset_name == 'DomainNet':
-            test_dataset = concat_dataset(root=root, tasks=target, split='test', download=True, transform=val_transform,
+    def concat_dataset(tasks, start_idx, **kwargs):
+        # return ConcatDataset([dataset(task=task, **kwargs) for task in tasks])
+        return MultipleDomainsDataset([dataset(task=task, **kwargs) for task in tasks], tasks,
+                                      domain_ids=list(range(start_idx, start_idx + len(tasks))))
+
+    train_source_dataset = concat_dataset(root=root, tasks=source, transform=train_source_transform,
+                                          start_idx=0)
+    train_target_dataset = concat_dataset(root=root, tasks=target, transform=train_target_transform,
                                           start_idx=len(source))
-        else:
-            test_dataset = val_dataset
-        class_names = train_source_dataset.datasets[0].classes
-        num_classes = len(class_names)
-    else:
-        raise NotImplementedError(dataset_name)
+    val_dataset = concat_dataset(root=root, tasks=target, transform=val_transform,
+                                 start_idx=len(source))
+    test_dataset = val_dataset
+
+    class_names = train_source_dataset.datasets[0].classes
+    num_classes = len(class_names)
+
     return train_source_dataset, train_target_dataset, val_dataset, test_dataset, num_classes, class_names
 
 
