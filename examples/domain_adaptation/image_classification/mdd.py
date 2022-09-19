@@ -85,9 +85,8 @@ def main(args: argparse.Namespace):
         return
 
     if args.phase == 'test':
-        acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader,
-                            train_target_loader)
-        print(acc1)
+        utils.report(args, device, classifier, logger.reports_directory,
+                     test_loader, train_source_loader, train_target_loader)
         return
 
     # start training
@@ -105,15 +104,15 @@ def main(args: argparse.Namespace):
         torch.save(classifier.state_dict(), logger.get_checkpoint_path('latest'))
         if acc1 > best_acc1:
             shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best'))
+            print("model saved")
         best_acc1 = max(acc1, best_acc1)
 
     print("best_acc1 = {:3.1f}".format(best_acc1))
 
     # evaluate on test set
     classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-    acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader,
-                        train_target_loader)
-    print("test_acc1 = {:3.1f}".format(acc1))
+    utils.report(args, device, classifier, logger.reports_directory,
+                 test_loader, train_source_loader, train_target_loader)
 
     logger.close()
 

@@ -369,7 +369,7 @@ def report(args, device, classifier, directory, test_loader, train_source_loader
 
     def report_domain_data(loader, domain):
 
-        acc1, y_true, y_pred_label, y_pred_domain = validate(loader, classifier, args, device, domain_discriminator)
+        loss, y_true, y_pred_label, y_pred_domain = validate(loader, classifier, args, device, domain_discriminator)
         y_pred_label = torch.argmax(torch.softmax(y_pred_label, dim=1), 1).numpy()
 
         if y_pred_domain is not None:
