@@ -29,6 +29,7 @@ from tllib.vision.datasets.imagelist import MultipleDomainsDataset
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, plot_confusion_matrix, matthews_corrcoef, classification_report,confusion_matrix, accuracy_score, balanced_accuracy_score, cohen_kappa_score, f1_score,  precision_score, recall_score
 
+
 def get_model_names():
     return sorted(
         name for name in models.__dict__
@@ -60,8 +61,8 @@ def get_dataset_names():
     ) + ['Digits']
 
 
-def get_dataset(dataset_name, root, source, target, train_source_transforms, val_transforms,
-                train_target_transforms=None):
+def get_dataset(dataset_name, root, source, target, validation,
+                train_source_transforms, val_transforms, train_target_transforms=None):
     if train_target_transforms is None:
         train_target_transforms = train_source_transforms
 
@@ -77,7 +78,7 @@ def get_dataset(dataset_name, root, source, target, train_source_transforms, val
                                           start_idx=0)
     train_target_dataset = concat_dataset(root=root, tasks=target, transforms=train_target_transforms,
                                           start_idx=len(source))
-    val_dataset = concat_dataset(root=root, tasks=target, transforms=val_transforms,
+    val_dataset = concat_dataset(root=root, tasks=validation, transforms=val_transforms,
                                  start_idx=len(source))
     test_dataset = val_dataset
 
@@ -296,14 +297,14 @@ def load_datasets(args):
 
     val_transforms = [get_val_transform(args.val_resizing, resize_size=args.resize_size,
                                         norm_mean=args.norm_mean, norm_std=args.norm_std,
-                                        crop_size=crop_sizes[target]) for target in args.target]
+                                        crop_size=crop_sizes[validation]) for validation in args.validation]
 
     print("train_source_transforms: ", train_source_transforms)
     print("train_target_transforms: ", train_target_transforms)
     print("val_transforms: ", val_transforms)
 
     train_source_dataset, train_target_dataset, val_dataset, test_dataset, num_classes, args.class_names = \
-        get_dataset(args.data, args.root, args.source, args.target,
+        get_dataset(args.data, args.root, args.source, args.target, args.validation,
                     train_source_transforms=train_source_transforms,
                     val_transforms=val_transforms,
                     train_target_transforms=train_target_transforms)
@@ -319,7 +320,7 @@ def load_datasets(args):
     return num_classes, test_loader, train_source_loader, train_target_loader, val_loader
 
 
-def classification_complete_report(y_true, y_pred, directory, labels=None):
+def classification_complete_report(y_true, y_pred, directory, filename, labels=None):
 
     output = ""
     output += classification_report(y_true, y_pred, labels=None) + "\n"
@@ -338,7 +339,7 @@ def classification_complete_report(y_true, y_pred, directory, labels=None):
     f1_score(y_true, y_pred, average="macro"), f1_score(y_true, y_pred, average="micro")) + "\n"
     print(output)
 
-    with open(os.path.join(directory, "report.txt"), "w") as f:
+    with open(os.path.join(directory, filename), "w") as f:
         f.write(output)
         f.close()
 
@@ -350,7 +351,7 @@ def classification_complete_report(y_true, y_pred, directory, labels=None):
     fig.savefig(os.path.join(directory, 'confusion_matrix.png'))
 
 
-def report(args, device, classifier, directory, test_loader, train_source_loader):
+def report(args, device, classifier, directory, test_loader, train_source_loader, train_target_loader):
 
     labels = datasets.__dict__[args.data].CLASSES
 
@@ -370,6 +371,14 @@ def report(args, device, classifier, directory, test_loader, train_source_loader
     y_pred = torch.argmax(torch.softmax(y_pred, dim=1), 1).numpy()
     y_true = [labels[int(x)] for x in y_true.numpy()]
     y_pred = [labels[x] for x in y_pred]
-    classification_complete_report(y_true, y_pred, directory, labels=labels)
+    classification_complete_report(y_true, y_pred, directory, "report_source.txt", labels=labels)
+
+    # @todo classification report separate for ace and mat
+    # generate classification report for the training set
+    acc1, y_pred, y_true = validate(train_target_loader, classifier, args, device)
+    y_pred = torch.argmax(torch.softmax(y_pred, dim=1), 1).numpy()
+    y_true = [labels[int(x)] for x in y_true.numpy()]
+    y_pred = [labels[x] for x in y_pred]
+    classification_complete_report(y_true, y_pred, directory, "report_target.txt", labels=labels)
 
     return acc1

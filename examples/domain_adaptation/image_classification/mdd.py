@@ -85,7 +85,7 @@ def main(args: argparse.Namespace):
         return
 
     if args.phase == 'test':
-        acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader)
+        acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader, train_target_loader)
         print(acc1)
         return
 
@@ -110,7 +110,7 @@ def main(args: argparse.Namespace):
 
     # evaluate on test set
     classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-    acc1, y_pred, y_true = utils.validate(test_loader, classifier, args, device)
+    acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader, train_target_loader)
     print("test_acc1 = {:3.1f}".format(acc1))
 
     logger.close()
@@ -154,8 +154,15 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
         y_s, y_t = outputs.chunk(2, dim=0)
         y_s_adv, y_t_adv = outputs_adv.chunk(2, dim=0)
 
+        # value counts from both datasets
+        # weight = torch.Tensor([1247, 3491, 1577, 3268, 662, 1179, 1030, 1742, 10130, 3185, 5101])
+        weight = torch.Tensor([1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.])
+        weight = 1. / weight
+        weight = weight / weight.sum()
+        weight = weight.to(device)
+
         # compute cross entropy loss on source domain
-        cls_loss = F.cross_entropy(y_s, labels_s)
+        cls_loss = F.cross_entropy(y_s, labels_s, weight=weight)
         # compute margin disparity discrepancy between domains
         # for adversarial classifier, minimize negative mdd is equal to maximize mdd
         transfer_loss = -mdd(y_s, y_s_adv, y_t, y_t_adv)
@@ -191,6 +198,7 @@ if __name__ == '__main__':
                              ' (default: Office31)')
     parser.add_argument('-s', '--source', help='source domain(s)', nargs='+')
     parser.add_argument('-t', '--target', help='target domain(s)', nargs='+')
+    parser.add_argument('-v', '--validation', help='validation domain(s)', nargs='+')
     parser.add_argument('--train-resizing', type=str, default='default')
     parser.add_argument('--val-resizing', type=str, default='default')
     parser.add_argument('--resize-size', type=int, default=224,
@@ -240,8 +248,9 @@ if __name__ == '__main__':
                         help='whether output per-class accuracy during evaluation')
     parser.add_argument("--log", type=str, default='mdd',
                         help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
+    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis', 'resume'],
                         help="When phase is 'test', only test the model."
-                             "When phase is 'analysis', only analysis the model.")
+                             "When phase is 'analysis', only analysis the model."
+                             "When phase is 'resume', we resume training of the model starting from the best saved configuration.")
     args = parser.parse_args()
     main(args)

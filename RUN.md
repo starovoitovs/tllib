@@ -6,7 +6,18 @@ Create symbolic links to the datasets:
 
 Run this command from the root of `tlda`:
 
-    python examples/domain_adaptation/image_classification/dann.py examples/domain_adaptation/image_classification/data/wbc -d WBC -s A M -t W -a resnet18 --epochs 20 --seed 1 --train-resizing=crop.resize --val-resizing=crop.resize --scale 0.8 1.0 --ratio 0.8 1.2 --log logs/dann/WBC_AM2W
+    CUDA_VISIBLE_DEVICES=0 python examples/domain_adaptation/image_classification/mdd.py \
+        examples/domain_adaptation/image_classification/data/wbc \
+        -d WBC -s A M -t W \
+        -a efficientnet_b4 \
+        --epochs 20 \
+        --seed 1 \
+        --train-resizing=crop.resize \
+        --val-resizing=crop.resize \
+        --scale 0.8 1.0 \
+        --ratio 0.8 1.2 \
+        --log logs/mdd_efficientnet_b4/WBC_AM2W \
+        --phase train
 
 Arguments `-s` and `-t` specify source and target dataset:
 
