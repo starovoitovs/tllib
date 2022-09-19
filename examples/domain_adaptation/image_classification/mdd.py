@@ -85,7 +85,8 @@ def main(args: argparse.Namespace):
         return
 
     if args.phase == 'test':
-        acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader, train_target_loader)
+        acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader,
+                            train_target_loader)
         print(acc1)
         return
 
@@ -98,7 +99,7 @@ def main(args: argparse.Namespace):
               lr_scheduler, epoch, args)
 
         # evaluate on validation set
-        acc1, y_pred, y_true = utils.validate(val_loader, classifier, args, device)
+        acc1, y_true, y_pred_label, y_pred_domain = utils.validate(val_loader, classifier, args, device)
 
         # remember best acc@1 and save checkpoint
         torch.save(classifier.state_dict(), logger.get_checkpoint_path('latest'))
@@ -110,7 +111,8 @@ def main(args: argparse.Namespace):
 
     # evaluate on test set
     classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-    acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader, train_target_loader)
+    acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader,
+                        train_target_loader)
     print("test_acc1 = {:3.1f}".format(acc1))
 
     logger.close()
@@ -138,12 +140,17 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
     for i in range(args.iters_per_epoch):
         optimizer.zero_grad()
 
-        x_s, labels_s = next(train_source_iter)[:2]
+        # w_s are source sample weights
+        x_s, labels_s, w_s = next(train_source_iter)[:3]
         x_t, = next(train_target_iter)[:1]
 
         x_s = x_s.to(device)
         x_t = x_t.to(device)
         labels_s = labels_s.to(device)
+        w_s = w_s.to(device)
+
+        # weights from Huang et al.
+        w_s = (1 - w_s) / w_s
 
         # measure data loading time
         data_time.update(time.time() - end)
@@ -156,16 +163,16 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
 
         # value counts from both datasets
         # weight = torch.Tensor([1247, 3491, 1577, 3268, 662, 1179, 1030, 1742, 10130, 3185, 5101])
-        weight = torch.Tensor([1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.])
-        weight = 1. / weight
-        weight = weight / weight.sum()
-        weight = weight.to(device)
+        class_weights = torch.Tensor([1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.])
+        class_weights = 1. / class_weights
+        class_weights = class_weights / class_weights.sum()
+        class_weights = class_weights.to(device)
 
         # compute cross entropy loss on source domain
-        cls_loss = F.cross_entropy(y_s, labels_s, weight=weight)
+        cls_loss = F.cross_entropy(y_s, labels_s, weight=class_weights)
         # compute margin disparity discrepancy between domains
         # for adversarial classifier, minimize negative mdd is equal to maximize mdd
-        transfer_loss = -mdd(y_s, y_s_adv, y_t, y_t_adv)
+        transfer_loss = -mdd(y_s, y_s_adv, y_t, y_t_adv, w_s=w_s)
         loss = cls_loss + transfer_loss * args.trade_off
         classifier.step()
 
@@ -248,9 +255,9 @@ if __name__ == '__main__':
                         help='whether output per-class accuracy during evaluation')
     parser.add_argument("--log", type=str, default='mdd',
                         help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis', 'resume'],
+    # @todo resume doesn't really work since it doesn't guarantee saving best model.
+    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
-                             "When phase is 'analysis', only analysis the model."
-                             "When phase is 'resume', we resume training of the model starting from the best saved configuration.")
+                             "When phase is 'analysis', only analysis the model.")
     args = parser.parse_args()
     main(args)

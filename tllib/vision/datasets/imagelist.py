@@ -45,24 +45,19 @@ class ImageList(datasets.VisionDataset):
         self.loader = default_loader
         self.data_list_file = data_list_file
 
-    def __getitem__(self, index: int) -> Tuple[Any, int]:
-        """
-        Args:
-            index (int): Index
-            return (tuple): (image, target) where target is index of the target class.
-        """
-        path, target = self.samples[index]
+    def __getitem__(self, index: int) -> Tuple[Any, int, float, str]:
+        path, target, weight = self.samples[index]
         img = self.loader(path)
         if self.transform is not None:
             img = self.transform(img)
         if self.target_transform is not None and target is not None:
             target = self.target_transform(target)
-        return img, target
+        return img, target, weight, path
 
     def __len__(self) -> int:
         return len(self.samples)
 
-    def parse_data_file(self, file_name: str) -> List[Tuple[str, int]]:
+    def parse_data_file(self, file_name: str) -> List[Tuple[str, int, float]]:
         """Parse file to data list
 
         Args:
@@ -73,12 +68,12 @@ class ImageList(datasets.VisionDataset):
             data_list = []
             for line in f.readlines():
                 split_line = line.split()
-                target = split_line[-1]
-                path = ' '.join(split_line[:-1])
+                path = ' '.join(split_line[:-2])
+                target = int(split_line[-2])
+                weight = float(split_line[-1])
                 if not os.path.isabs(path):
                     path = os.path.join(self.root, path)
-                target = int(target)
-                data_list.append((path, target))
+                data_list.append((path, target, weight))
         return data_list
 
     @property

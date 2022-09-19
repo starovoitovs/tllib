@@ -57,15 +57,15 @@ def main(args: argparse.Namespace):
     pool_layer = nn.Identity() if args.no_pool else None
     classifier = ImageClassifier(backbone, num_classes, bottleneck_dim=args.bottleneck_dim,
                                  pool_layer=pool_layer, finetune=not args.scratch).to(device)
-    domain_discri = DomainDiscriminator(in_feature=classifier.features_dim, hidden_size=1024).to(device)
+    domain_discriminator = DomainDiscriminator(in_feature=classifier.features_dim, hidden_size=1024).to(device)
 
     # define optimizer and lr scheduler
-    optimizer = SGD(classifier.get_parameters() + domain_discri.get_parameters(),
+    optimizer = SGD(classifier.get_parameters() + domain_discriminator.get_parameters(),
                     args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
     lr_scheduler = LambdaLR(optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
 
     # define loss function
-    domain_adv = DomainAdversarialLoss(domain_discri).to(device)
+    domain_adv = DomainAdversarialLoss(domain_discriminator).to(device)
 
     # resume from the best checkpoint
     if args.phase != 'train':
@@ -88,7 +88,9 @@ def main(args: argparse.Namespace):
         return
 
     if args.phase == 'test':
-        acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader, train_target_loader)
+        acc1 = utils.report(args, device, classifier, logger.reports_directory,
+                            test_loader, train_source_loader, train_target_loader,
+                            domain_discriminator=domain_discriminator)
         print(acc1)
         return
 
@@ -101,7 +103,7 @@ def main(args: argparse.Namespace):
               lr_scheduler, epoch, args)
 
         # evaluate on validation set
-        acc1, y_pred, y_true = utils.validate(val_loader, classifier, args, device)
+        acc1, y_true, y_pred_label, y_pred_domain = utils.validate(val_loader, classifier, args, device)
 
         # remember best acc@1 and save checkpoint
         torch.save(classifier.state_dict(), logger.get_checkpoint_path('latest'))
@@ -113,7 +115,9 @@ def main(args: argparse.Namespace):
 
     # evaluate on test set
     classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-    acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader, train_target_loader)
+    acc1 = utils.report(args, device, classifier, logger.reports_directory,
+                        test_loader, train_source_loader, train_target_loader,
+                        domain_discriminator=domain_discriminator)
     print("test_acc1 = {:3.1f}".format(acc1))
 
     logger.close()
@@ -138,7 +142,7 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
 
     end = time.time()
     for i in range(args.iters_per_epoch):
-        x_s, labels_s = next(train_source_iter)[:2]
+        x_s, labels_s, w_s = next(train_source_iter)[:3]
         x_t, = next(train_target_iter)[:1]
 
         x_s = x_s.to(device)
@@ -155,7 +159,7 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
         f_s, f_t = f.chunk(2, dim=0)
 
         cls_loss = F.cross_entropy(y_s, labels_s)
-        transfer_loss = domain_adv(f_s, f_t)
+        transfer_loss = domain_adv(f_s, f_t, w_s=w_s)
         domain_acc = domain_adv.domain_discriminator_accuracy
         loss = cls_loss + transfer_loss * args.trade_off
 
@@ -244,9 +248,8 @@ if __name__ == '__main__':
                         help='whether output per-class accuracy during evaluation')
     parser.add_argument("--log", type=str, default='dann',
                         help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis', 'resume'],
+    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
-                             "When phase is 'analysis', only analysis the model."
-                             "When phase is 'resume', we resume training of the model starting from the best saved configuration.")
+                             "When phase is 'analysis', only analysis the model.")
     args = parser.parse_args()
     main(args)
