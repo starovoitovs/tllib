@@ -75,8 +75,7 @@ def get_dataset(dataset_name, root, source, target, validation,
         domains = [dataset(task=task, transform=transform, **kwargs) for task, transform in zip(tasks, transforms)]
         return MultipleDomainsDataset(domains, tasks, domain_ids=list(range(start_idx, start_idx + len(tasks))))
 
-    train_source_dataset = concat_dataset(root=root, tasks=source, transforms=train_source_transforms,
-                                          start_idx=0)
+    train_source_dataset = concat_dataset(root=root, tasks=source, transforms=train_source_transforms, start_idx=0)
     train_target_dataset = concat_dataset(root=root, tasks=target, transforms=train_target_transforms,
                                           start_idx=len(source))
     val_dataset = concat_dataset(root=root, tasks=validation, transforms=val_transforms,
@@ -142,7 +141,7 @@ def validate(loader, classifier, args, device, discriminator=None):
             top1.update(acc1.item(), images.size(0))
 
             # measure elapsed time
-            batch_time.update(time.time() - end)    
+            batch_time.update(time.time() - end)
             end = time.time()
 
             if i % args.print_freq == 0:
@@ -328,7 +327,7 @@ def load_datasets(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
 
-    return num_classes, test_loader, train_source_loader, train_target_loader, val_loader
+    return num_classes, train_source_loader, train_target_loader, val_loader, test_loader
 
 
 def classification_complete_report(y_true, y_pred, directory, filename, labels=None):
