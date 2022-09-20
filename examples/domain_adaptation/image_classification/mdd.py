@@ -90,24 +90,23 @@ def main(args: argparse.Namespace):
         return
 
     # start training
-    best_acc1 = 0.
+    best_transfer_loss = 1e20
+
     for epoch in range(args.epochs):
         print(lr_scheduler.get_lr())
         # train for one epoch
-        train(train_source_iter, train_target_iter, classifier, mdd, optimizer,
-              lr_scheduler, epoch, args)
-
-        # evaluate on validation set
-        acc1, y_true, y_pred_label, y_pred_domain = utils.validate(val_loader, classifier, args, device)
+        transfer_loss = train(train_source_iter, train_target_iter, classifier, mdd, optimizer,
+                              lr_scheduler, epoch, args)
 
         # remember best acc@1 and save checkpoint
         torch.save(classifier.state_dict(), logger.get_checkpoint_path('latest'))
-        if acc1 > best_acc1:
+        if transfer_loss < best_transfer_loss:
             shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best'))
             print("model saved")
-        best_acc1 = max(acc1, best_acc1)
 
-    print("best_acc1 = {:3.1f}".format(best_acc1))
+        best_transfer_loss = min(transfer_loss, best_transfer_loss)
+
+    print("best_transfer_loss = {:3.1f}".format(best_transfer_loss))
 
     # evaluate on test set
     classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
@@ -146,10 +145,10 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
         x_s = x_s.to(device)
         x_t = x_t.to(device)
         labels_s = labels_s.to(device)
-        w_s = w_s.to(device)
 
         # weights from Huang et al.
-        w_s = (1 - w_s) / w_s
+        # w_s = w_s.to(device)
+        # w_s = (1 - w_s) / w_s
 
         # measure data loading time
         data_time.update(time.time() - end)
@@ -161,7 +160,7 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
         y_s_adv, y_t_adv = outputs_adv.chunk(2, dim=0)
 
         # value counts from both datasets
-        # weight = torch.Tensor([1247, 3491, 1577, 3268, 662, 1179, 1030, 1742, 10130, 3185, 5101])
+        # class_weights = torch.Tensor([1247, 3491, 1577, 3268, 662, 1179, 1030, 1742, 10130, 3185, 5101])
         class_weights = torch.Tensor([1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.])
         class_weights = 1. / class_weights
         class_weights = class_weights / class_weights.sum()
@@ -171,7 +170,7 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
         cls_loss = F.cross_entropy(y_s, labels_s, weight=class_weights)
         # compute margin disparity discrepancy between domains
         # for adversarial classifier, minimize negative mdd is equal to maximize mdd
-        transfer_loss = -mdd(y_s, y_s_adv, y_t, y_t_adv, w_s=w_s)
+        transfer_loss = -mdd(y_s, y_s_adv, y_t, y_t_adv)
         loss = cls_loss + transfer_loss * args.trade_off
         classifier.step()
 
@@ -192,6 +191,8 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
 
         if i % args.print_freq == 0:
             progress.display(i)
+
+    return trans_losses.avg
 
 
 if __name__ == '__main__':

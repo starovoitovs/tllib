@@ -80,7 +80,7 @@ def get_dataset(dataset_name, root, source, target, validation,
     train_target_dataset = concat_dataset(root=root, tasks=target, transforms=train_target_transforms,
                                           start_idx=len(source))
     val_dataset = concat_dataset(root=root, tasks=validation, transforms=val_transforms,
-                                 start_idx=len(source))
+                                 start_idx=len(source) + len(target))
     test_dataset = val_dataset
 
     class_names = train_source_dataset.datasets[0].classes
@@ -142,13 +142,12 @@ def validate(loader, classifier, args, device, discriminator=None):
             top1.update(acc1.item(), images.size(0))
 
             # measure elapsed time
-            batch_time.update(time.time() - end)
+            batch_time.update(time.time() - end)    
             end = time.time()
 
             if i % args.print_freq == 0:
                 progress.display(i)
 
-        print(' * Acc@1 {top1.avg:.3f}'.format(top1=top1))
         if confmat:
             print(confmat.format(args.class_names))
 
@@ -369,7 +368,7 @@ def report(args, device, classifier, directory, test_loader, train_source_loader
 
     def report_domain_data(loader, domain):
 
-        loss, y_true, y_pred_label, y_pred_domain = validate(loader, classifier, args, device, domain_discriminator)
+        acc1, y_true, y_pred_label, y_pred_domain = validate(loader, classifier, args, device, domain_discriminator)
         y_pred_label = torch.argmax(torch.softmax(y_pred_label, dim=1), 1).numpy()
 
         if y_pred_domain is not None:
