@@ -57,13 +57,10 @@ class MarginDisparityDiscrepancy(nn.Module):
         >>> output = loss(y_s, y_s_adv, y_t, y_t_adv)
     """
 
-    def __init__(self, source_disparity: Callable, target_disparity: Callable,
-                 margin: Optional[float] = 4, reduction: Optional[str] = 'mean'):
+    def __init__(self, margin: Optional[float] = 4, reduction: Optional[str] = 'mean'):
         super(MarginDisparityDiscrepancy, self).__init__()
         self.margin = margin
         self.reduction = reduction
-        self.source_disparity = source_disparity
-        self.target_disparity = target_disparity
 
     def forward(self, y_s: torch.Tensor, y_s_adv: torch.Tensor, y_t: torch.Tensor, y_t_adv: torch.Tensor,
                 w_s: Optional[torch.Tensor] = None, w_t: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -139,82 +136,16 @@ class ClassificationMarginDisparityDiscrepancy(MarginDisparityDiscrepancy):
         >>> output = loss(y_s, y_s_adv, y_t, y_t_adv)
     """
 
+    def source_disparity(self, y: torch.Tensor, y_adv: torch.Tensor):
+        _, prediction = y.max(dim=1)
+        return F.cross_entropy(y_adv, prediction, reduction='none')
+
+    def target_disparity(self, y: torch.Tensor, y_adv: torch.Tensor):
+        _, prediction = y.max(dim=1)
+        return -F.nll_loss(shift_log(1. - F.softmax(y_adv, dim=1)), prediction, reduction='none')
+
     def __init__(self, margin: Optional[float] = 4, **kwargs):
-        def source_discrepancy(y: torch.Tensor, y_adv: torch.Tensor):
-            _, prediction = y.max(dim=1)
-            return F.cross_entropy(y_adv, prediction, reduction='none')
-
-        def target_discrepancy(y: torch.Tensor, y_adv: torch.Tensor):
-            _, prediction = y.max(dim=1)
-            return -F.nll_loss(shift_log(1. - F.softmax(y_adv, dim=1)), prediction, reduction='none')
-
-        super(ClassificationMarginDisparityDiscrepancy, self).__init__(source_discrepancy, target_discrepancy, margin,
-                                                                       **kwargs)
-
-
-class RegressionMarginDisparityDiscrepancy(MarginDisparityDiscrepancy):
-    r"""
-    The margin disparity discrepancy (MDD) proposed in `Bridging Theory and Algorithm for Domain Adaptation (ICML 2019) <https://arxiv.org/abs/1904.05801>`_.
-
-    It measures the distribution discrepancy in domain adaptation
-    for regression.
-
-    The :math:`y^s` and :math:`y^t` are logits output by the main regressor on the source and target domain respectively.
-    The :math:`y_{adv}^s` and :math:`y_{adv}^t` are logits output by the adversarial regressor.
-    They are expected to contain ``normalized`` values for each factors.
-
-    The definition can be described as:
-
-    .. math::
-        \mathcal{D}_{\gamma}(\hat{\mathcal{S}}, \hat{\mathcal{T}}) =
-        -\gamma \mathbb{E}_{y^s, y_{adv}^s \sim\hat{\mathcal{S}}} L (y^s, y_{adv}^s) +
-        \mathbb{E}_{y^t, y_{adv}^t \sim\hat{\mathcal{T}}} L (y^t, y_{adv}^t),
-
-    where :math:`\gamma` is a margin hyper-parameter and :math:`L` refers to the disparity function defined on both domains.
-    You can see more details in `Bridging Theory and Algorithm for Domain Adaptation <https://arxiv.org/abs/1904.05801>`_.
-
-    Args:
-        loss_function (callable): The disparity function defined on both domains, :math:`L`.
-        margin (float): margin :math:`\gamma`. Default: 1
-        reduction (str, optional): Specifies the reduction to apply to the output:
-          ``'none'`` | ``'mean'`` | ``'sum'``. ``'none'``: no reduction will be applied,
-          ``'mean'``: the sum of the output will be divided by the number of
-          elements in the output, ``'sum'``: the output will be summed. Default: ``'mean'``
-
-    Inputs:
-        - y_s: logits output :math:`y^s` by the main regressor on the source domain
-        - y_s_adv: logits output :math:`y^s` by the adversarial regressor on the source domain
-        - y_t: logits output :math:`y^t` by the main regressor on the target domain
-        - y_t_adv: logits output :math:`y_{adv}^t` by the adversarial regressor on the target domain
-
-    Shape:
-        - Inputs: :math:`(minibatch, F)` where F = number of factors, or :math:`(minibatch, F, d_1, d_2, ..., d_K)`
-          with :math:`K \geq 1` in the case of `K`-dimensional loss.
-        - Output: scalar. The same size as the target: :math:`(minibatch)`, or
-          :math:`(minibatch, d_1, d_2, ..., d_K)` with :math:`K \geq 1` in the case of K-dimensional loss.
-
-    Examples::
-
-        >>> num_outputs = 2
-        >>> batch_size = 10
-        >>> loss = RegressionMarginDisparityDiscrepancy(margin=4., loss_function=F.l1_loss)
-        >>> # output from source domain and target domain
-        >>> y_s, y_t = torch.randn(batch_size, num_outputs), torch.randn(batch_size, num_outputs)
-        >>> # adversarial output from source domain and target domain
-        >>> y_s_adv, y_t_adv = torch.randn(batch_size, num_outputs), torch.randn(batch_size, num_outputs)
-        >>> output = loss(y_s, y_s_adv, y_t, y_t_adv)
-
-    """
-
-    def __init__(self, margin: Optional[float] = 1, loss_function=F.l1_loss, **kwargs):
-        def source_discrepancy(y: torch.Tensor, y_adv: torch.Tensor):
-            return loss_function(y_adv, y.detach(), reduction='none')
-
-        def target_discrepancy(y: torch.Tensor, y_adv: torch.Tensor):
-            return loss_function(y_adv, y.detach(), reduction='none')
-
-        super(RegressionMarginDisparityDiscrepancy, self).__init__(source_discrepancy, target_discrepancy, margin,
-                                                                   **kwargs)
+        super(ClassificationMarginDisparityDiscrepancy, self).__init__(margin, **kwargs)
 
 
 def shift_log(x: torch.Tensor, offset: Optional[float] = 1e-6) -> torch.Tensor:

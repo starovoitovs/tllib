@@ -6,18 +6,24 @@ import os
 import random
 import warnings
 import argparse
+from typing import Optional, Callable, Dict, Any
+
 import pandas as pd
 
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
+from mlflow.store.artifact.artifact_repository_registry import get_artifact_repository
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.plugins import CheckpointIO, TorchCheckpointIO
+from pytorch_lightning.utilities.types import _PATH
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, ConcatDataset, BatchSampler, RandomSampler, Subset
+from torch.utils.data import DataLoader, ConcatDataset, BatchSampler, RandomSampler
 from torchmetrics.functional import accuracy
 from torchvision.datasets import ImageFolder
+import torchvision.transforms as T
 
 import mlflow.pytorch
 import mlflow
@@ -49,121 +55,138 @@ def main(args: argparse.Namespace):
 
     model_checkpoints = [best_entropy_checkpoint, best_snd_checkpoint, last_model]
 
-    model = MDD(num_classes=len(CLASSES))
-    dm = WBCDataModule()
+    model = MDD(args=args, num_classes=len(CLASSES))
+    dm = WBCDataModule(args)
 
     # Auto log all MLflow entities
-    mlflow.pytorch.autolog(log_every_n_step=1, log_models=False)
+    mlflow.pytorch.autolog(log_models=False)
 
-    with mlflow.start_run() as run:
+    with mlflow.start_run(run_id=args.run_id) as run:
 
-        # @todo devices as arg
-        trainer = pl.Trainer(max_epochs=args.epochs, callbacks=[*model_checkpoints], devices=4, accelerator="auto")
+        class MLFlowCheckpointIO(TorchCheckpointIO):
+            def save_checkpoint(self, checkpoint, path, storage_options=None):
+                super().save_checkpoint(checkpoint, path, storage_options)
+                mlflow.log_artifact(path, 'checkpoints')
+
+        trainer = pl.Trainer(max_epochs=args.epochs, callbacks=[*model_checkpoints], devices=args.devices, accelerator="auto")
+        trainer.strategy.checkpoint_io = MLFlowCheckpointIO()
 
         if args.phase == 'train':
             trainer.fit(model, dm)
 
-        # @todo evokes some warning
-        model.load_from_checkpoint(best_snd_checkpoint.best_model_path, num_classes=len(CLASSES))
+        repository = get_artifact_repository(run.info.artifact_uri)
+        best_model_path = os.path.join(repository._artifact_dir, 'checkpoints/best_snd.ckpt')
+        print(f"Loading best model from {best_model_path}")
+        model.load_from_checkpoint(best_model_path, num_classes=len(CLASSES), args=args)
 
         # need zero here for some reason
         output = trainer.predict(model, dm)[0]
         logits = torch.softmax(output, dim=1)
         predictions = torch.argmax(logits, dim=1)
 
-        # save logits
-        pd.DataFrame(logits).to_csv('logits.csv', header=False, index=False)
-        mlflow.log_artifact('logits.csv')
-
-        # save predictions
-        pd.DataFrame(predictions).to_csv('predictions.csv', header=False, index=False)
+        df = pd.read_csv(os.path.join(args.root, 'image_list/wbc.txt'), sep=' ', header=None, names=['Image', 'LabelID'])
+        df['Image'] = df['Image'].apply(lambda x: x[14:])
+        df['LabelID'] = predictions.numpy()
+        df['Label'] = df['LabelID'].apply(lambda x: CLASSES[x])
+        df = df[['Image', 'LabelID', 'Label']]
+        df.to_csv('predictions.csv')
         mlflow.log_artifact('predictions.csv')
 
+        # save logits
+        pd.DataFrame(logits.numpy()).to_csv('logits.csv', header=False, index=False)
+        mlflow.log_artifact('logits.csv')
+
         # @todo test, predictions, logits, report, metrics, save model checkpoints
-        # [ ] runs should have names
-        # [ ] phase=test
-        # [ ] save model checkpoints and best model
-        # [ ] allow to run test for predictions and reports only
-        # [ ] export logits
-        # [ ] export labels
         # [ ] record stdout
+        # [ ] problem with gpus=4 and multiprocessing: cannot pickle
+        # [ ] make sure classes are ordered correctly
 
 
 class WBCDataModule(pl.LightningDataModule):
 
+    def __init__(self, args) -> None:
+        super().__init__()
+        self.args = args
+
     def setup(self, stage):
-        ace_transforms = utils.get_train_transform(args.train_resizing, scale=args.scale, ratio=args.ratio,
-                                                   random_horizontal_flip=not args.no_hflip,
-                                                   random_color_jitter=False, resize_size=args.resize_size,
-                                                   norm_mean=args.norm_mean, norm_std=args.norm_std,
+        ace_transforms = utils.get_train_transform(self.args.train_resizing, scale=self.args.scale,
+                                                   ratio=self.args.ratio,
+                                                   random_horizontal_flip=not self.args.no_hflip,
+                                                   random_color_jitter=False, resize_size=self.args.resize_size,
+                                                   norm_mean=self.args.norm_mean, norm_std=self.args.norm_std,
                                                    crop_size=250)
-        self.ace_dataset = ImageFolder(os.path.join(args.root, 'Acevedo_20'), transform=ace_transforms)
-        # self.ace_dataset = Subset(self.ace_dataset, range(32))
+        self.ace_dataset = ImageFolder(os.path.join(self.args.root, 'Acevedo_20'), transform=ace_transforms)
 
-        mat_transforms = utils.get_train_transform(args.train_resizing, scale=args.scale, ratio=args.ratio,
-                                                   random_horizontal_flip=not args.no_hflip,
-                                                   random_color_jitter=False, resize_size=args.resize_size,
-                                                   norm_mean=args.norm_mean, norm_std=args.norm_std,
+        mat_transforms = utils.get_train_transform(self.args.train_resizing, scale=self.args.scale,
+                                                   ratio=self.args.ratio,
+                                                   random_horizontal_flip=not self.args.no_hflip,
+                                                   random_color_jitter=False, resize_size=self.args.resize_size,
+                                                   norm_mean=self.args.norm_mean, norm_std=self.args.norm_std,
                                                    crop_size=345)
-        self.mat_dataset = ImageFolder(os.path.join(args.root, 'Matek_19'), transform=mat_transforms)
-        # self.mat_dataset = Subset(self.mat_dataset, range(32))
+        self.mat_dataset = ImageFolder(os.path.join(self.args.root, 'Matek_19'), transform=mat_transforms)
 
-        wbc_transforms = utils.get_val_transform(args.val_resizing, resize_size=args.resize_size,
-                                                 norm_mean=args.norm_mean, norm_std=args.norm_std,
+        wbc_transforms = utils.get_val_transform(self.args.val_resizing, resize_size=self.args.resize_size,
+                                                 norm_mean=self.args.norm_mean, norm_std=self.args.norm_std,
                                                  crop_size=288)
-        self.wbc_dataset = ImageFolder(os.path.join(args.root, 'WBC1'), transform=wbc_transforms)
-        # self.wbc_dataset = Subset(self.wbc_dataset, range(32))
+        self.wbc_dataset = ImageFolder(os.path.join(self.args.root, 'WBC1'), transform=wbc_transforms)
 
     def train_dataloader(self):
-
         # custom batch samplers ensure that the number of samples is in sync
 
         source_dataset = ConcatDataset([self.ace_dataset, self.mat_dataset])
         source_batch_sampler = BatchSampler(
-            RandomSampler(source_dataset, num_samples=args.batch_size * args.iters_per_epoch, replacement=True),
-            batch_size=args.batch_size, drop_last=True)
-        train_source_loader = DataLoader(source_dataset, num_workers=args.workers, batch_sampler=source_batch_sampler)
+            RandomSampler(source_dataset, num_samples=self.args.batch_size * self.args.iters_per_epoch,
+                          replacement=True),
+            batch_size=self.args.batch_size, drop_last=True)
+        train_source_loader = DataLoader(source_dataset, num_workers=self.args.workers,
+                                         batch_sampler=source_batch_sampler)
 
         target_dataset = self.wbc_dataset
         target_batch_sampler = BatchSampler(
-            RandomSampler(target_dataset, num_samples=args.batch_size * args.iters_per_epoch, replacement=True),
-            batch_size=args.batch_size, drop_last=True)
-        train_target_loader = DataLoader(self.wbc_dataset, num_workers=args.workers, batch_sampler=target_batch_sampler)
+            RandomSampler(target_dataset, num_samples=self.args.batch_size * self.args.iters_per_epoch,
+                          replacement=True),
+            batch_size=self.args.batch_size, drop_last=True)
+        train_target_loader = DataLoader(self.wbc_dataset, num_workers=self.args.workers,
+                                         batch_sampler=target_batch_sampler)
 
         return {"source": train_source_loader, "target": train_target_loader}
 
     def val_dataloader(self):
         # no batching due to SND
-        return DataLoader(self.wbc_dataset, batch_size=len(self.wbc_dataset), num_workers=args.workers)
+        return DataLoader(self.wbc_dataset, batch_size=len(self.wbc_dataset), num_workers=self.args.workers)
 
     def test_dataloader(self):
         # no batching due to SND
-        return DataLoader(self.wbc_dataset, batch_size=len(self.wbc_dataset), num_workers=args.workers)
+        return DataLoader(self.wbc_dataset, batch_size=len(self.wbc_dataset), num_workers=self.args.workers)
 
     def predict_dataloader(self):
-        return DataLoader(self.wbc_dataset, batch_size=args.batch_size, num_workers=args.workers)
+        # no batching due to predicting all
+        return DataLoader(self.wbc_dataset, batch_size=len(self.wbc_dataset), num_workers=self.args.workers)
 
 
 class MDD(pl.LightningModule):
 
-    def __init__(self, num_classes):
+    def __init__(self, args, num_classes):
         super(MDD, self).__init__()
+        self.args = args
+        self.num_classes = num_classes
 
-        backbone = utils.get_model(args.arch, pretrain=not args.scratch)
-        pool_layer = nn.Identity() if args.no_pool else None
+        backbone = utils.get_model(self.args.arch, pretrain=not self.args.scratch)
+        pool_layer = nn.Identity() if self.args.no_pool else None
 
-        self.classifier = ImageClassifier(backbone, num_classes, bottleneck_dim=args.bottleneck_dim,
-                                          width=args.bottleneck_dim, pool_layer=pool_layer)
-        self.mdd = MarginDisparityDiscrepancy(args.margin)
+        self.classifier = ImageClassifier(backbone, num_classes, bottleneck_dim=self.args.bottleneck_dim,
+                                          width=self.args.bottleneck_dim, pool_layer=pool_layer)
+        self.mdd = MarginDisparityDiscrepancy(self.args.margin)
 
     def forward(self, x):
         return self.classifier(x)
 
     # The learning rate of the classifiers are set 10 times to that of the feature extractor by default.
     def configure_optimizers(self):
-        optimizer = SGD(self.classifier.get_parameters(), args.lr,
-                        momentum=args.momentum, weight_decay=args.wd, nesterov=True)
-        lr_scheduler = LambdaLR(optimizer, lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (-args.lr_decay))
+        optimizer = SGD(self.classifier.get_parameters(), self.args.lr,
+                        momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=True)
+        lr_scheduler = LambdaLR(optimizer,
+                                lambda x: self.args.lr * (1. + self.args.lr_gamma * float(x)) ** (-self.args.lr_decay))
         return {"optimizer": optimizer, "lr_scheduler": lr_scheduler}
 
     def training_step(self, train_batch, batch_id):
@@ -182,7 +205,7 @@ class MDD(pl.LightningModule):
         # compute margin disparity discrepancy between domains
         # for adversarial classifier, minimize negative mdd is equal to maximize mdd
         transfer_loss = -self.mdd(y_s, y_s_adv, y_t, y_t_adv)
-        loss = cls_loss + transfer_loss * args.trade_off
+        loss = cls_loss + transfer_loss * self.args.trade_off
         cls_acc = accuracy(y_s, labels_s)
 
         self.log('train_cls_loss', cls_loss)
@@ -193,7 +216,6 @@ class MDD(pl.LightningModule):
         return loss
 
     def validation_step(self, val_batch, batch_id):
-
         # w_s are source sample weights
         x_t, labels_t = val_batch
         outputs, outputs_adv, features = self.classifier(x_t)
@@ -203,11 +225,12 @@ class MDD(pl.LightningModule):
 
         self.log('val_entropy', entropy)
 
-        normalized = F.normalize(logits)
-        mat = torch.matmul(normalized, normalized.t()) / 0.05
+        # important factor to tell apart the neighborhoods
+        normalized = F.normalize(logits).cpu()
+        mat = torch.matmul(normalized, normalized.t()) / self.args.temperature
         mask = torch.eye(mat.size(0), mat.size(0)).bool()
-        mat.masked_fill_(mask, -1 / 0.05)
-        mat = F.softmax(mat)
+        mat.masked_fill_(mask, -1 / self.args.temperature)
+        mat = F.softmax(mat, dim=1)
         ent_soft = F.cross_entropy(mat, mat, reduction='none').mean()
         self.log('val_snd', ent_soft)
 
@@ -259,7 +282,9 @@ if __name__ == '__main__':
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
     parser.add_argument('--wd', '--weight-decay', default=0.0005, type=float,
                         metavar='W', help='weight decay (default: 5e-4)')
-    parser.add_argument('-j', '--workers', default=2, type=int, metavar='N',
+    parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
+                        help='number of data loading workers (default: 4)')
+    parser.add_argument('--devices', default=1, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
     parser.add_argument('--epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
@@ -276,5 +301,7 @@ if __name__ == '__main__':
     parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
                              "When phase is 'analysis', only analysis the model.")
+    parser.add_argument('--run-id', default=None, type=str, help='load specific mlflow run, for example for inference')
+    parser.add_argument('--temperature', default=None, type=float, help='SND temperature')
     args = parser.parse_args()
     main(args)
