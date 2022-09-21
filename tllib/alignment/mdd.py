@@ -250,7 +250,7 @@ class GeneralModule(nn.Module):
         self.grl_layer = WarmStartGradientReverseLayer(alpha=1.0, lo=0.0, hi=0.1, max_iters=1000,
                                                        auto_step=False) if grl is None else grl
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """"""
         features = self.backbone(x)
         features = self.bottleneck(features)
@@ -258,7 +258,7 @@ class GeneralModule(nn.Module):
         features_adv = self.grl_layer(features)
         outputs_adv = self.adv_head(features_adv)
 
-        return outputs, outputs_adv
+        return outputs, outputs_adv, features
         
     def step(self):
         """

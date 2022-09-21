@@ -6,11 +6,12 @@ import os
 import random
 import warnings
 import argparse
+import pandas as pd
 
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
-from pytorch_lightning.loggers import MLFlowLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn.functional as F
@@ -42,22 +43,49 @@ def main(args: argparse.Namespace):
 
     cudnn.benchmark = True
 
-    model = MDD(len(CLASSES))
+    best_entropy_checkpoint = ModelCheckpoint(filename='best_entropy', monitor='val_entropy', save_top_k=1)
+    best_snd_checkpoint = ModelCheckpoint(filename='best_snd', monitor='val_snd', save_top_k=1)
+    last_model = ModelCheckpoint(save_last=True, every_n_epochs=0)
+
+    model_checkpoints = [best_entropy_checkpoint, best_snd_checkpoint, last_model]
+
+    model = MDD(num_classes=len(CLASSES))
     dm = WBCDataModule()
-    trainer = pl.Trainer(max_epochs=args.epochs)
 
     # Auto log all MLflow entities
-    mlflow.pytorch.autolog(log_every_n_step=1)
+    mlflow.pytorch.autolog(log_every_n_step=1, log_models=False)
 
-    # Train the model
     with mlflow.start_run() as run:
-        trainer.fit(model, dm)
 
-    trainer.fit(model, dm)
-    trainer.predict(model, dm)
+        trainer = pl.Trainer(max_epochs=args.epochs, callbacks=[*model_checkpoints])
 
-    # @todo test, predictions, logits, report
-    # @todo save model checkpoints
+        if args.phase == 'train':
+            trainer.fit(model, dm)
+
+        # @todo evokes some warning
+        model.load_from_checkpoint(best_snd_checkpoint.best_model_path, num_classes=len(CLASSES))
+
+        # need zero here for some reason
+        output = trainer.predict(model, dm)[0]
+        logits = torch.softmax(output, dim=1)
+        predictions = torch.argmax(logits, dim=1)
+
+        # save logits
+        pd.DataFrame(logits).to_csv('logits.csv', header=False, index=False)
+        mlflow.log_artifact('logits.csv')
+
+        # save predictions
+        pd.DataFrame(predictions).to_csv('predictions.csv', header=False, index=False)
+        mlflow.log_artifact('predictions.csv')
+
+        # @todo test, predictions, logits, report, metrics, save model checkpoints
+        # [ ] runs should have names
+        # [ ] phase=test
+        # [ ] save model checkpoints and best model
+        # [ ] allow to run test for predictions and reports only
+        # [ ] export logits
+        # [ ] export labels
+        # [ ] record stdout
 
 
 class WBCDataModule(pl.LightningDataModule):
@@ -69,7 +97,7 @@ class WBCDataModule(pl.LightningDataModule):
                                                    norm_mean=args.norm_mean, norm_std=args.norm_std,
                                                    crop_size=250)
         self.ace_dataset = ImageFolder(os.path.join(args.root, 'Acevedo_20'), transform=ace_transforms)
-        self.ace_dataset = Subset(self.ace_dataset, range(128))
+        # self.ace_dataset = Subset(self.ace_dataset, range(32))
 
         mat_transforms = utils.get_train_transform(args.train_resizing, scale=args.scale, ratio=args.ratio,
                                                    random_horizontal_flip=not args.no_hflip,
@@ -77,13 +105,13 @@ class WBCDataModule(pl.LightningDataModule):
                                                    norm_mean=args.norm_mean, norm_std=args.norm_std,
                                                    crop_size=345)
         self.mat_dataset = ImageFolder(os.path.join(args.root, 'Matek_19'), transform=mat_transforms)
-        self.mat_dataset = Subset(self.mat_dataset, range(128))
+        # self.mat_dataset = Subset(self.mat_dataset, range(32))
 
         wbc_transforms = utils.get_val_transform(args.val_resizing, resize_size=args.resize_size,
                                                  norm_mean=args.norm_mean, norm_std=args.norm_std,
                                                  crop_size=288)
         self.wbc_dataset = ImageFolder(os.path.join(args.root, 'WBC1'), transform=wbc_transforms)
-        self.wbc_dataset = Subset(self.wbc_dataset, range(32))
+        # self.wbc_dataset = Subset(self.wbc_dataset, range(32))
 
     def train_dataloader(self):
 
@@ -128,7 +156,7 @@ class MDD(pl.LightningModule):
         self.mdd = MarginDisparityDiscrepancy(args.margin)
 
     def forward(self, x):
-        return self.classifier(x)[0]
+        return self.classifier(x)
 
     # The learning rate of the classifiers are set 10 times to that of the feature extractor by default.
     def configure_optimizers(self):
@@ -165,8 +193,6 @@ class MDD(pl.LightningModule):
 
     def validation_step(self, val_batch, batch_id):
 
-        # @todo implement snd
-
         # w_s are source sample weights
         x_t, labels_t = val_batch
         outputs, outputs_adv, features = self.classifier(x_t)
@@ -176,10 +202,20 @@ class MDD(pl.LightningModule):
 
         self.log('val_entropy', entropy)
 
-        snd = 0.
-        self.log('val_snd', snd)
+        normalized = F.normalize(logits)
+        mat = torch.matmul(normalized, normalized.t()) / 0.05
+        mask = torch.eye(mat.size(0), mat.size(0)).bool()
+        mat.masked_fill_(mask, -1 / 0.05)
+        mat = F.softmax(mat)
+        ent_soft = F.cross_entropy(mat, mat, reduction='none').mean()
+        self.log('val_snd', ent_soft)
 
         return entropy
+
+    def predict_step(self, batch, batch_idx):
+        x, y = batch
+        output, output_adv, features = self.classifier(x)
+        return output
 
 
 if __name__ == '__main__':

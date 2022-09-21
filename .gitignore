@@ -139,3 +139,5 @@ examples/domain_adaptation/image_classification/data/wbc/WBC1
 examples/domain_adaptation/image_classification/data/wbc/Acevedo_20
 examples/domain_adaptation/image_classification/data/wbc/Matek_19
 logs
+artifacts
+lightning_logs
