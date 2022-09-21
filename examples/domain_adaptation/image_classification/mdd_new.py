@@ -57,7 +57,8 @@ def main(args: argparse.Namespace):
 
     with mlflow.start_run() as run:
 
-        trainer = pl.Trainer(max_epochs=args.epochs, callbacks=[*model_checkpoints])
+        # @todo devices as arg
+        trainer = pl.Trainer(max_epochs=args.epochs, callbacks=[*model_checkpoints], devices=4, accelerator="auto")
 
         if args.phase == 'train':
             trainer.fit(model, dm)
@@ -223,12 +224,6 @@ if __name__ == '__main__':
     # dataset parameters
     parser.add_argument('root', metavar='DIR',
                         help='root path of dataset')
-    parser.add_argument('-d', '--data', metavar='DATA', default='Office31', choices=utils.get_dataset_names(),
-                        help='dataset: ' + ' | '.join(utils.get_dataset_names()) +
-                             ' (default: Office31)')
-    parser.add_argument('-s', '--source', help='source domain(s)', nargs='+')
-    parser.add_argument('-t', '--target', help='target domain(s)', nargs='+')
-    parser.add_argument('-v', '--validation', help='validation domain(s)', nargs='+')
     parser.add_argument('--train-resizing', type=str, default='default')
     parser.add_argument('--val-resizing', type=str, default='default')
     parser.add_argument('--resize-size', type=int, default=224,
