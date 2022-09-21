@@ -6,7 +6,6 @@ import os
 import random
 import warnings
 import argparse
-from typing import Optional, Callable, Dict, Any
 
 import pandas as pd
 
@@ -15,15 +14,13 @@ import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from mlflow.store.artifact.artifact_repository_registry import get_artifact_repository
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.plugins import CheckpointIO, TorchCheckpointIO
-from pytorch_lightning.utilities.types import _PATH
+from pytorch_lightning.plugins import TorchCheckpointIO
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, ConcatDataset, BatchSampler, RandomSampler
 from torchmetrics.functional import accuracy
 from torchvision.datasets import ImageFolder
-import torchvision.transforms as T
 
 import mlflow.pytorch
 import mlflow
@@ -32,8 +29,10 @@ import utils
 from tllib.alignment.mdd import ClassificationMarginDisparityDiscrepancy as MarginDisparityDiscrepancy, ImageClassifier
 import pytorch_lightning as pl
 
-CLASSES = ['basophil', 'eosinophil', 'erythroblast', 'myeloblast', 'promyelocyte', 'myelocyte', 'metamyelocyte',
-           'neutrophil_banded', 'neutrophil_segmented', 'monocyte', 'lymphocyte_typical']
+NUM_CLASSES = 11
+
+CLASSES = ['basophil', 'eosinophil', 'erythroblast', 'lymphocyte_typical', 'metamyelocyte', 'monocyte', 'myeloblast',
+           'myelocyte', 'neutrophil_banded', 'neutrophil_segmented', 'promyelocyte']
 
 
 def main(args: argparse.Namespace):
@@ -55,7 +54,7 @@ def main(args: argparse.Namespace):
 
     model_checkpoints = [best_entropy_checkpoint, best_snd_checkpoint, last_model]
 
-    model = MDD(args=args, num_classes=len(CLASSES))
+    model = MDD(args=args, num_classes=NUM_CLASSES)
     dm = WBCDataModule(args)
 
     # Auto log all MLflow entities
@@ -68,23 +67,25 @@ def main(args: argparse.Namespace):
                 super().save_checkpoint(checkpoint, path, storage_options)
                 mlflow.log_artifact(path, 'checkpoints')
 
-        trainer = pl.Trainer(max_epochs=args.epochs, callbacks=[*model_checkpoints], devices=args.devices, accelerator="auto")
+        trainer = pl.Trainer(max_epochs=args.epochs, callbacks=[*model_checkpoints], devices=args.devices,
+                             accelerator="auto")
         trainer.strategy.checkpoint_io = MLFlowCheckpointIO()
 
         if args.phase == 'train':
             trainer.fit(model, dm)
 
         repository = get_artifact_repository(run.info.artifact_uri)
-        best_model_path = os.path.join(repository._artifact_dir, 'checkpoints/best_snd.ckpt')
+        best_model_path = os.path.join(repository._artifact_dir, 'checkpoints/best_entropy.ckpt')
         print(f"Loading best model from {best_model_path}")
-        model.load_from_checkpoint(best_model_path, num_classes=len(CLASSES), args=args)
+        model.load_from_checkpoint(best_model_path, num_classes=NUM_CLASSES, args=args)
 
         # need zero here for some reason
         output = trainer.predict(model, dm)[0]
         logits = torch.softmax(output, dim=1)
         predictions = torch.argmax(logits, dim=1)
 
-        df = pd.read_csv(os.path.join(args.root, 'image_list/wbc.txt'), sep=' ', header=None, names=['Image', 'LabelID'])
+        df = pd.read_csv(os.path.join(args.root, 'image_list/wbc.txt'), sep=' ', header=None,
+                         names=['Image', 'LabelID'])
         df['Image'] = df['Image'].apply(lambda x: x[14:])
         df['LabelID'] = predictions.numpy()
         df['Label'] = df['LabelID'].apply(lambda x: CLASSES[x])
@@ -100,6 +101,7 @@ def main(args: argparse.Namespace):
         # [ ] record stdout
         # [ ] problem with gpus=4 and multiprocessing: cannot pickle
         # [ ] make sure classes are ordered correctly
+        # [ ] record which epoch model was best
 
 
 class WBCDataModule(pl.LightningDataModule):
@@ -109,6 +111,7 @@ class WBCDataModule(pl.LightningDataModule):
         self.args = args
 
     def setup(self, stage):
+
         ace_transforms = utils.get_train_transform(self.args.train_resizing, scale=self.args.scale,
                                                    ratio=self.args.ratio,
                                                    random_horizontal_flip=not self.args.no_hflip,
@@ -131,12 +134,11 @@ class WBCDataModule(pl.LightningDataModule):
         self.wbc_dataset = ImageFolder(os.path.join(self.args.root, 'WBC1'), transform=wbc_transforms)
 
     def train_dataloader(self):
-        # custom batch samplers ensure that the number of samples is in sync
 
+        # custom batch samplers ensure that the number of samples is in sync
         source_dataset = ConcatDataset([self.ace_dataset, self.mat_dataset])
         source_batch_sampler = BatchSampler(
-            RandomSampler(source_dataset, num_samples=self.args.batch_size * self.args.iters_per_epoch,
-                          replacement=True),
+            RandomSampler(source_dataset, num_samples=self.args.batch_size * self.args.iters_per_epoch, replacement=True),
             batch_size=self.args.batch_size, drop_last=True)
         train_source_loader = DataLoader(source_dataset, num_workers=self.args.workers,
                                          batch_sampler=source_batch_sampler)
@@ -231,7 +233,9 @@ class MDD(pl.LightningModule):
         mask = torch.eye(mat.size(0), mat.size(0)).bool()
         mat.masked_fill_(mask, -1 / self.args.temperature)
         mat = F.softmax(mat, dim=1)
-        ent_soft = F.cross_entropy(mat, mat, reduction='none').mean()
+
+        # set minus to minimize
+        ent_soft = -F.cross_entropy(mat, mat, reduction='none').mean()
         self.log('val_snd', ent_soft)
 
         return entropy
@@ -302,6 +306,6 @@ if __name__ == '__main__':
                         help="When phase is 'test', only test the model."
                              "When phase is 'analysis', only analysis the model.")
     parser.add_argument('--run-id', default=None, type=str, help='load specific mlflow run, for example for inference')
-    parser.add_argument('--temperature', default=None, type=float, help='SND temperature')
+    parser.add_argument('--temperature', default=0.05, type=float, help='SND temperature')
     args = parser.parse_args()
     main(args)
