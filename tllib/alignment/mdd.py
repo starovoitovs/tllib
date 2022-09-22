@@ -257,10 +257,8 @@ class GeneralModule(nn.Module):
         outputs = self.head(features)
         features_adv = self.grl_layer(features)
         outputs_adv = self.adv_head(features_adv)
-        if self.training:
-            return outputs, outputs_adv
-        else:
-            return outputs
+
+        return outputs, outputs_adv
 
     def step(self):
         """

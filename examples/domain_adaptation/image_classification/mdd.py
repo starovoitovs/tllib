@@ -25,7 +25,6 @@ from tllib.utils.metric import accuracy
 from tllib.utils.meter import AverageMeter, ProgressMeter
 from tllib.utils.logger import CompleteLogger
 from tllib.utils.analysis import collect_feature, tsne, a_distance
-from tllib.vision import datasets
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -85,33 +84,45 @@ def main(args: argparse.Namespace):
         return
 
     if args.phase == 'test':
-        acc1 = utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader)
-        print(acc1)
+        utils.report(args, device, classifier, logger.reports_directory, test_loader, train_source_loader)
         return
 
     # start training
-    best_acc1 = 0.
+    best_train_transfer_loss = 1e20
+    best_val_entropy = 1e20
+    best_val_snd = 1e20
+
     for epoch in range(args.epochs):
+
         print(lr_scheduler.get_lr())
+
         # train for one epoch
-        train(train_source_iter, train_target_iter, classifier, mdd, optimizer,
-              lr_scheduler, epoch, args)
+        train_loss, train_transfer_loss = train(train_source_iter, train_target_iter, classifier, mdd, optimizer, lr_scheduler, epoch, args)
 
         # evaluate on validation set
-        acc1, y_pred, y_true = utils.validate(val_loader, classifier, args, device)
+        y_pred, y_true, val_entropy, val_snd = utils.validate(val_loader, classifier, args, device, epoch, logger.reports_directory)
 
         # remember best acc@1 and save checkpoint
         torch.save(classifier.state_dict(), logger.get_checkpoint_path('latest'))
-        if acc1 > best_acc1:
-            shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best'))
-        best_acc1 = max(acc1, best_acc1)
 
-    print("best_acc1 = {:3.1f}".format(best_acc1))
+        # select best transfer loss
+        if train_transfer_loss < best_train_transfer_loss:
+            shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best_train_transfer_loss'))
+        best_train_transfer_loss = min(train_transfer_loss, best_train_transfer_loss)
 
-    # evaluate on test set
-    classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-    acc1, y_pred, y_true = utils.validate(test_loader, classifier, args, device)
-    print("test_acc1 = {:3.1f}".format(acc1))
+        # select best transfer loss
+        if val_entropy < best_val_entropy:
+            shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best_val_entropy'))
+        best_val_entropy = min(val_entropy, best_val_entropy)
+
+        # select best transfer loss
+        if val_snd < best_val_snd:
+            shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best_val_snd'))
+        best_val_snd = min(val_snd, best_val_snd)
+
+    print("best_train_transfer_loss = {:3.1f}".format(best_train_transfer_loss))
+    print("best_val_entropy = {:3.1f}".format(best_val_entropy))
+    print("best_val_snd = {:3.1f}".format(best_val_snd))
 
     logger.close()
 
@@ -180,6 +191,8 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
         if i % args.print_freq == 0:
             progress.display(i)
 
+    return losses.avg, trans_losses.avg
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MDD for Unsupervised Domain Adaptation')
@@ -243,5 +256,6 @@ if __name__ == '__main__':
     parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
                         help="When phase is 'test', only test the model."
                              "When phase is 'analysis', only analysis the model.")
+    parser.add_argument('--temperature', default=5e-5, type=float, help='temperature for snd.')
     args = parser.parse_args()
     main(args)

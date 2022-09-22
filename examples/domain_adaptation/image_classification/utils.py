@@ -69,16 +69,12 @@ def get_dataset(dataset_name, root, source, target, train_source_transforms, val
     dataset = datasets.__dict__[dataset_name]
 
     def concat_dataset(tasks, start_idx, transforms, **kwargs):
-        # return ConcatDataset([dataset(task=task, **kwargs) for task in tasks])
         domains = [dataset(task=task, transform=transform, **kwargs) for task, transform in zip(tasks, transforms)]
         return MultipleDomainsDataset(domains, tasks, domain_ids=list(range(start_idx, start_idx + len(tasks))))
 
-    train_source_dataset = concat_dataset(root=root, tasks=source, transforms=train_source_transforms,
-                                          start_idx=0)
-    train_target_dataset = concat_dataset(root=root, tasks=target, transforms=train_target_transforms,
-                                          start_idx=len(source))
-    val_dataset = concat_dataset(root=root, tasks=target, transforms=val_transforms,
-                                 start_idx=len(source))
+    train_source_dataset = concat_dataset(root=root, tasks=source, transforms=train_source_transforms, start_idx=0)
+    train_target_dataset = concat_dataset(root=root, tasks=target, transforms=train_target_transforms, start_idx=len(source))
+    val_dataset = concat_dataset(root=root, tasks=target, transforms=val_transforms, start_idx=len(source))
     test_dataset = val_dataset
 
     class_names = train_source_dataset.datasets[0].classes
@@ -87,59 +83,54 @@ def get_dataset(dataset_name, root, source, target, train_source_transforms, val
     return train_source_dataset, train_target_dataset, val_dataset, test_dataset, num_classes, class_names
 
 
-def validate(val_loader, model, args, device):
-    batch_time = AverageMeter('Time', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    progress = ProgressMeter(
-        len(val_loader),
-        [batch_time, losses, top1],
-        prefix='Test: ')
+# @todo note that due to SND we don't batch validation set, need the entire set to calculate neighborhoods
+#  (thus metrics for batch train_source don't really make sense)
+def validate(val_loader, model, args, device, epoch, reportsdir):
 
     # switch to evaluate mode
     model.eval()
-    if args.per_class_eval:
-        confmat = ConfusionMatrix(len(args.class_names))
-    else:
-        confmat = None
 
     y_pred = torch.empty((0,))
     y_true = torch.empty((0,))
 
     with torch.no_grad():
+
         end = time.time()
-        for i, data in enumerate(val_loader):
 
-            images, target = data[:2]
-            images = images.to(device)
-            target = target.to(device)
+        x_t, labels_t = next(iter(val_loader))[:2]
+        x_t = x_t.to(device)
+        labels_t = labels_t.to(device)
 
-            # compute output
-            output = model(images)
-            loss = F.cross_entropy(output, target)
+        # compute output
+        outputs, outputs_adv = model(x_t)
 
-            y_pred = torch.cat([y_pred, output.cpu()])
-            y_true = torch.cat([y_true, target.cpu()])
+        # attach outputs
+        y_pred = torch.cat([y_pred, outputs.cpu()])
+        y_true = torch.cat([y_true, labels_t.cpu()])
 
-            # measure accuracy and record loss
-            acc1, = accuracy(output, target, topk=(1,))
-            if confmat:
-                confmat.update(target, output.argmax(1))
-            losses.update(loss.item(), images.size(0))
-            top1.update(acc1.item(), images.size(0))
+        # compute logits and entropy
+        logits = torch.softmax(outputs, dim=1)
+        entropy = F.cross_entropy(logits, logits, reduction='none').mean()
 
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
+        # save logits
+        directory = os.path.join(reportsdir, 'logits')
+        fname = os.path.join(directory, f'{epoch}.csv')
+        os.makedirs(directory, exist_ok=True)
+        pd.DataFrame(logits.cpu().numpy()).to_csv(fname, header=False, index=False)
 
-            if i % args.print_freq == 0:
-                progress.display(i)
+        # important factor to tell apart the neighborhoods
+        normalized = F.normalize(logits).cpu()
+        mat = torch.matmul(normalized, normalized.t()) / args.temperature
+        mask = torch.eye(mat.size(0), mat.size(0)).bool()
+        mat.masked_fill_(mask, -1 / args.temperature)
+        mat = F.softmax(mat, dim=1)
 
-        print(' * Acc@1 {top1.avg:.3f}'.format(top1=top1))
-        if confmat:
-            print(confmat.format(args.class_names))
+        # set minus to minimize
+        snd = -F.cross_entropy(mat, mat, reduction='none').mean()
 
-    return top1.avg, y_pred, y_true
+        print(f'[VALIDATION] entropy: {entropy:7.4}; snd: {snd:7.4}')
+
+    return y_pred, y_true, entropy, snd
 
 
 def get_train_transform(resizing='default', scale=(0.08, 1.0), ratio=(3. / 4., 4. / 3.), random_horizontal_flip=True,
@@ -313,8 +304,9 @@ def load_datasets(args):
     train_target_loader = DataLoader(train_target_dataset, batch_size=args.batch_size,
                                      shuffle=True, num_workers=args.workers, drop_last=True)
 
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    # hardcode big batch size for validation due to SND
+    val_loader = DataLoader(val_dataset, len(val_dataset), shuffle=False, num_workers=args.workers)
+    test_loader = DataLoader(test_dataset, len(val_dataset), shuffle=False, num_workers=args.workers)
 
     return num_classes, test_loader, train_source_loader, train_target_loader, val_loader
 
@@ -355,8 +347,9 @@ def report(args, device, classifier, directory, test_loader, train_source_loader
     labels = datasets.__dict__[args.data].CLASSES
 
     # save predictions for the test dataset
-    acc1, y_pred, y_true = validate(test_loader, classifier, args, device)
-    y_pred = torch.argmax(torch.softmax(y_pred, dim=1), 1).numpy()
+    y_pred, y_true, val_entropy, val_snd = validate(test_loader, classifier, args, device)
+    soft = torch.softmax(y_pred, dim=1)
+    y_pred = torch.argmax(soft, 1).numpy()
 
     df = pd.read_csv(os.path.join(args.root, 'image_list/wbc.txt'), sep=' ', header=None, names=['Image', 'LabelID'])
     df['Image'] = df['Image'].apply(lambda x: x[14:])
@@ -364,12 +357,13 @@ def report(args, device, classifier, directory, test_loader, train_source_loader
     df['Label'] = df['LabelID'].apply(lambda x: labels[x])
     df.to_csv(os.path.join(directory, 'predictions.csv'))
 
+    df = pd.DataFrame(soft.numpy())
+    df.to_csv(os.path.join(directory, 'logits.csv'), header=False, index=False)
+
     # @todo classification report separate for ace and mat
     # generate classification report for the training set
-    acc1, y_pred, y_true = validate(train_source_loader, classifier, args, device)
+    y_pred, y_true, val_entropy, val_snd = validate(train_source_loader, classifier, args, device)
     y_pred = torch.argmax(torch.softmax(y_pred, dim=1), 1).numpy()
     y_true = [labels[int(x)] for x in y_true.numpy()]
     y_pred = [labels[x] for x in y_pred]
     classification_complete_report(y_true, y_pred, directory, labels=labels)
-
-    return acc1
