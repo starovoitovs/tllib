@@ -65,7 +65,7 @@ def main(args: argparse.Namespace):
 
     # resume from the best checkpoint
     if args.phase != 'train':
-        checkpoint = torch.load(logger.get_checkpoint_path('best'), map_location='cpu')
+        checkpoint = torch.load(logger.get_checkpoint_path('best_val_snd'), map_location='cpu')
         classifier.load_state_dict(checkpoint)
 
     # analysis the model
@@ -120,9 +120,9 @@ def main(args: argparse.Namespace):
             shutil.copy(logger.get_checkpoint_path('latest'), logger.get_checkpoint_path('best_val_snd'))
         best_val_snd = min(val_snd, best_val_snd)
 
-    print("best_train_transfer_loss = {:3.1f}".format(best_train_transfer_loss))
-    print("best_val_entropy = {:3.1f}".format(best_val_entropy))
-    print("best_val_snd = {:3.1f}".format(best_val_snd))
+    print("best_train_transfer_loss = {:3.4f}".format(best_train_transfer_loss))
+    print("best_val_entropy = {:3.4f}".format(best_val_entropy))
+    print("best_val_snd = {:3.4f}".format(best_val_snd))
 
     logger.close()
 
@@ -150,11 +150,14 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
         optimizer.zero_grad()
 
         x_s, labels_s = next(train_source_iter)[:2]
-        x_t, = next(train_target_iter)[:1]
+        x_t, w_t = next(train_target_iter)[:2]
+
+        w_t = 1./w_t
+        w_t = w_t.to(device)
 
         x_s = x_s.to(device)
-        x_t = x_t.to(device)
         labels_s = labels_s.to(device)
+        x_t = x_t.to(device)
 
         # measure data loading time
         data_time.update(time.time() - end)
@@ -165,8 +168,11 @@ def train(train_source_iter: ForeverDataIterator, train_target_iter: ForeverData
         y_s, y_t = outputs.chunk(2, dim=0)
         y_s_adv, y_t_adv = outputs_adv.chunk(2, dim=0)
 
+        weight = torch.Tensor([0.15136876, 0.03462684, 0.0546176, 0.02788372, 0.21191627, 0.19621877, 0.15136876, 0.11773126, 0.01383265, 0.02745029, 0.01298507])
+        weight = weight.to(device)
+
         # compute cross entropy loss on source domain
-        cls_loss = F.cross_entropy(y_s, labels_s)
+        cls_loss = F.cross_entropy(y_s, labels_s, weight=weight)
         # compute margin disparity discrepancy between domains
         # for adversarial classifier, minimize negative mdd is equal to maximize mdd
         transfer_loss = -mdd(y_s, y_s_adv, y_t, y_t_adv)

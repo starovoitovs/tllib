@@ -45,7 +45,7 @@ class ImageList(datasets.VisionDataset):
         self.loader = default_loader
         self.data_list_file = data_list_file
 
-    def __getitem__(self, index: int) -> Tuple[Any, int]:
+    def __getitem__(self, index):
         """
         Args:
             index (int): Index
@@ -77,7 +77,12 @@ class ImageList(datasets.VisionDataset):
                 path = ' '.join(split_line[:-1])
                 if not os.path.isabs(path):
                     path = os.path.join(self.root, path)
-                target = int(target)
+
+                try:
+                    target = int(target)
+                except:
+                    target = float(target)
+
                 data_list.append((path, target))
         return data_list
 

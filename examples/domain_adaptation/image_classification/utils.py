@@ -4,7 +4,6 @@
 """
 import sys
 import os
-import os.path as osp
 import time
 import pandas as pd
 from PIL import Image
@@ -22,12 +21,12 @@ sys.path.append('../../..')
 import tllib.vision.datasets as datasets
 import tllib.vision.models as models
 from tllib.vision.transforms import ResizeImage
-from tllib.utils.metric import accuracy, ConfusionMatrix
+from tllib.utils.metric import accuracy
 from tllib.utils.meter import AverageMeter, ProgressMeter
 from tllib.vision.datasets.imagelist import MultipleDomainsDataset
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, plot_confusion_matrix, matthews_corrcoef, classification_report,confusion_matrix, accuracy_score, balanced_accuracy_score, cohen_kappa_score, f1_score,  precision_score, recall_score
+from sklearn.metrics import ConfusionMatrixDisplay, matthews_corrcoef, classification_report,confusion_matrix, accuracy_score, balanced_accuracy_score, cohen_kappa_score, f1_score,  precision_score, recall_score
+
 
 def get_model_names():
     return sorted(
@@ -85,7 +84,7 @@ def get_dataset(dataset_name, root, source, target, train_source_transforms, val
 
 # @todo note that due to SND we don't batch validation set, need the entire set to calculate neighborhoods
 #  (thus metrics for batch train_source don't really make sense)
-def validate(val_loader, model, args, device, epoch, reportsdir):
+def validate(val_loader, model, args, device, epoch=None, reportsdir=None):
 
     # switch to evaluate mode
     model.eval()
@@ -112,12 +111,6 @@ def validate(val_loader, model, args, device, epoch, reportsdir):
         logits = torch.softmax(outputs, dim=1)
         entropy = F.cross_entropy(logits, logits, reduction='none').mean()
 
-        # save logits
-        directory = os.path.join(reportsdir, 'logits')
-        fname = os.path.join(directory, f'{epoch}.csv')
-        os.makedirs(directory, exist_ok=True)
-        pd.DataFrame(logits.cpu().numpy()).to_csv(fname, header=False, index=False)
-
         # important factor to tell apart the neighborhoods
         normalized = F.normalize(logits).cpu()
         mat = torch.matmul(normalized, normalized.t()) / args.temperature
@@ -127,6 +120,13 @@ def validate(val_loader, model, args, device, epoch, reportsdir):
 
         # set minus to minimize
         snd = -F.cross_entropy(mat, mat, reduction='none').mean()
+
+        if reportsdir is not None:
+            # save logits
+            directory = os.path.join(reportsdir, 'logits')
+            fname = os.path.join(directory, f'{epoch}.csv')
+            os.makedirs(directory, exist_ok=True)
+            pd.DataFrame(logits.cpu().numpy()).to_csv(fname, header=False, index=False)
 
         print(f'[VALIDATION] entropy: {entropy:7.4}; snd: {snd:7.4}')
 
@@ -287,7 +287,7 @@ def load_datasets(args):
 
     val_transforms = [get_val_transform(args.val_resizing, resize_size=args.resize_size,
                                         norm_mean=args.norm_mean, norm_std=args.norm_std,
-                                        crop_size=crop_sizes[target]) for target in args.target]
+                                        crop_size=360) for target in args.target]
 
     print("train_source_transforms: ", train_source_transforms)
     print("train_target_transforms: ", train_target_transforms)
@@ -351,11 +351,11 @@ def report(args, device, classifier, directory, test_loader, train_source_loader
     soft = torch.softmax(y_pred, dim=1)
     y_pred = torch.argmax(soft, 1).numpy()
 
-    df = pd.read_csv(os.path.join(args.root, 'image_list/wbc.txt'), sep=' ', header=None, names=['Image', 'LabelID'])
-    df['Image'] = df['Image'].apply(lambda x: x[14:])
+    df = pd.read_csv(os.path.join(args.root, 'image_list/wbc2.txt'), sep=' ', header=None, names=['Image', 'LabelID'])
+    df['Image'] = df['Image'].apply(lambda x: x[15:])
     df['LabelID'] = y_pred
     df['Label'] = df['LabelID'].apply(lambda x: labels[x])
-    df.to_csv(os.path.join(directory, 'predictions.csv'))
+    df.to_csv(os.path.join(directory, 'test_predictions_best_snd.csv'))
 
     df = pd.DataFrame(soft.numpy())
     df.to_csv(os.path.join(directory, 'logits.csv'), header=False, index=False)

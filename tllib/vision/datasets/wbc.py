@@ -14,6 +14,7 @@ class WBC(ImageList):
         "A": "image_list/ace.txt",
         "M": "image_list/mat.txt",
         "W": "image_list/wbc.txt",
+        "T": "image_list/wbc2.txt",
     }
 
     CLASSES = ['basophil', 'eosinophil', 'erythroblast', 'myeloblast', 'promyelocyte', 'myelocyte', 'metamyelocyte',
@@ -23,6 +24,7 @@ class WBC(ImageList):
         'A': 250,
         'M': 345,
         'W': 288,
+        'T': 288,
     }
 
     def __init__(self, root: str, task: str, **kwargs):
