@@ -1,6 +1,9 @@
 """
 @author: Junguang Jiang
 @contact: JiangJunguang1123@outlook.com
+----
+@author: Konstantins Starovoitovs
+@contact: starovoitovs@gmail.com
 """
 import os
 import random
