@@ -6,13 +6,26 @@ Create symbolic links to the datasets:
 
 Run this command from the root of `tlda`:
 
-    python examples/domain_adaptation/image_classification/dann.py examples/domain_adaptation/image_classification/data/wbc -d WBC -s A M -t W -a resnet18 --epochs 20 --seed 1 --train-resizing=crop.resize --val-resizing=crop.resize --scale 0.8 1.0 --ratio 0.8 1.2 --log logs/dann/WBC_AM2W
+    # old training
+    CUDA_VISIBLE_DEVICES=0 python examples/domain_adaptation/image_classification/mdd.py \
+        /p/project/hai_ds_isa/starovoitovs1/Datasets \
+        -d WBC \
+        --source A M --target W \
+        -a resnet18 \
+        --epochs 300 \
+        --iters-per-epoch 100 \
+        --seed 1 \
+        --log ../tll_old/logs/custom_mean_std/WBC_AM2W \
+        --margin 4 \
+        --trade-off 1 \
+        --phase train
 
 Arguments `-s` and `-t` specify source and target dataset:
 
 * A = Acevedo_20
 * M = Matek_19
 * W = WBC1
+* T = WBC2
 
 You can specify several letters (for example `A M` for Acevedo_20 and Matek_19).
 

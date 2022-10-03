@@ -21,10 +21,24 @@ class WBC(ImageList):
                'neutrophil_banded', 'neutrophil_segmented', 'monocyte', 'lymphocyte_typical']
 
     crop_sizes = {
-        'A': 250,
+        'A': 300,
         'M': 345,
         'W': 288,
         'T': 288,
+    }
+
+    norm_means = {
+        'A': [0.8691, 0.7415, 0.7161],
+        'M': [0.8209, 0.7282, 0.8364],
+        'W': [0.7404, 0.6518, 0.7791],
+        'T': [0.7404, 0.6518, 0.7791],
+    }
+
+    norm_stds = {
+        'A': [0.1635, 0.1909, 0.0789],
+        'M': [0.1649, 0.2523, 0.0945],
+        'W': [0.1884, 0.2513, 0.1654],
+        'T': [0.1884, 0.2513, 0.1654],
     }
 
     def __init__(self, root: str, task: str, **kwargs):

@@ -6,7 +6,6 @@ import sys
 import os
 import time
 import pandas as pd
-from PIL import Image
 
 import matplotlib.pyplot as plt
 import timm
@@ -14,13 +13,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-import torchvision.transforms as T
-from timm.data.auto_augment import auto_augment_transform, rand_augment_transform
+import albumentations as A
+from albumentations.pytorch.transforms import ToTensorV2
 
 sys.path.append('../../..')
 import tllib.vision.datasets as datasets
 import tllib.vision.models as models
-from tllib.vision.transforms import ResizeImage
 from tllib.utils.metric import accuracy
 from tllib.utils.meter import AverageMeter, ProgressMeter
 from tllib.vision.datasets.imagelist import MultipleDomainsDataset
@@ -133,90 +131,35 @@ def validate(val_loader, model, args, device, epoch=None, reportsdir=None):
     return y_pred, y_true, entropy, snd
 
 
-def get_train_transform(resizing='default', scale=(0.08, 1.0), ratio=(3. / 4., 4. / 3.), random_horizontal_flip=True,
-                        random_color_jitter=False, resize_size=224, norm_mean=(0.485, 0.456, 0.406),
-                        norm_std=(0.229, 0.224, 0.225), auto_augment=None, crop_size=None, random_vertical_flip=True):
-    """
-    resizing mode:
-        - default: resize the image to 256 and take a random resized crop of size 224;
-        - cen.crop: resize the image to 256 and take the center crop of size 224;
-        - res: resize the image to 224;
-    """
-    transformed_img_size = 224
-    if resizing == 'default':
-        transform = T.Compose([
-            ResizeImage(256),
-            T.RandomResizedCrop(224, scale=scale, ratio=ratio)
-        ])
-    elif resizing == 'cen.crop':
-        transform = T.Compose([
-            ResizeImage(256),
-            T.CenterCrop(224)
-        ])
-    elif resizing == 'ran.crop':
-        transform = T.Compose([
-            ResizeImage(256),
-            T.RandomCrop(224)
-        ])
-    elif resizing == 'crop.resize':
-        transform = T.Compose([
-            T.CenterCrop(crop_size),
-            T.RandomResizedCrop(224, scale=scale, ratio=ratio),
-        ])
-    elif resizing == 'res.':
-        transform = ResizeImage(resize_size)
-        transformed_img_size = resize_size
-    else:
-        raise NotImplementedError(resizing)
-    transforms = [transform]
-    if random_horizontal_flip:
-        transforms.append(T.RandomHorizontalFlip())
-    if random_vertical_flip:
-        transforms.append(T.RandomVerticalFlip())
-    if auto_augment:
-        aa_params = dict(
-            translate_const=int(transformed_img_size * 0.45),
-            img_mean=tuple([min(255, round(255 * x)) for x in norm_mean]),
-            interpolation=Image.BILINEAR
-        )
-        if auto_augment.startswith('rand'):
-            transforms.append(rand_augment_transform(auto_augment, aa_params))
-        else:
-            transforms.append(auto_augment_transform(auto_augment, aa_params))
-    elif random_color_jitter:
-        transforms.append(T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5))
-    transforms.extend([
-        T.ToTensor(),
-        T.Normalize(mean=norm_mean, std=norm_std)
+def get_train_transform(norm_mean, norm_std, crop_size):
+
+    transform = A.Compose([
+        # crop
+        A.CenterCrop(width=crop_size, height=crop_size),
+        A.RandomCrop(width=224, height=224),
+        # blur
+        A.Blur(blur_limit=7, p=0.5),
+        A.RandomFog(),
+        A.ColorJitter(brightness=0.3, contrast=0.5, saturation=0.5, hue=0.),
+        # geometry
+        A.Flip(p=0.5),
+        A.Rotate(limit=(-180, 180)),
+        A.RandomScale(scale_limit=0.2),
+        # normalize
+        A.Resize(width=224, height=224),
+        A.Normalize(mean=norm_mean, std=norm_std),
+        ToTensorV2(),
     ])
-    return T.Compose(transforms)
+
+    return transform
 
 
-def get_val_transform(resizing='default', resize_size=224,
-                      norm_mean=(0.485, 0.456, 0.406), norm_std=(0.229, 0.224, 0.225), crop_size=None):
-    """
-    resizing mode:
-        - default: resize the image to 256 and take the center crop of size 224;
-        – res.: resize the image to 224
-    """
-    if resizing == 'default':
-        transform = T.Compose([
-            ResizeImage(256),
-            T.CenterCrop(224),
-        ])
-    elif resizing == 'res.':
-        transform = ResizeImage(resize_size)
-    elif resizing == 'crop.resize':
-        transform = T.Compose([
-            T.CenterCrop(crop_size),
-            ResizeImage(224),
-        ])
-    else:
-        raise NotImplementedError(resizing)
-    return T.Compose([
-        transform,
-        T.ToTensor(),
-        T.Normalize(mean=norm_mean, std=norm_std)
+def get_val_transform(norm_mean, norm_std, crop_size):
+    return A.Compose([
+        A.CenterCrop(width=crop_size, height=crop_size),
+        A.Resize(width=224, height=224),
+        A.Normalize(mean=norm_mean, std=norm_std),
+        ToTensorV2(),
     ])
 
 
@@ -271,23 +214,13 @@ def empirical_risk_minimization(train_source_iter, model, optimizer, lr_schedule
 def load_datasets(args):
 
     crop_sizes = datasets.__dict__[args.data].crop_sizes
+    norm_means = datasets.__dict__[args.data].norm_means
+    norm_stds = datasets.__dict__[args.data].norm_stds
 
     # Data loading code
-    train_source_transforms = [get_train_transform(args.train_resizing, scale=args.scale, ratio=args.ratio,
-                                                   random_horizontal_flip=not args.no_hflip,
-                                                   random_color_jitter=False, resize_size=args.resize_size,
-                                                   norm_mean=args.norm_mean, norm_std=args.norm_std,
-                                                   crop_size=crop_sizes[source]) for source in args.source]
-
-    train_target_transforms = [get_train_transform(args.train_resizing, scale=args.scale, ratio=args.ratio,
-                                                   random_horizontal_flip=not args.no_hflip,
-                                                   random_color_jitter=False, resize_size=args.resize_size,
-                                                   norm_mean=args.norm_mean, norm_std=args.norm_std,
-                                                   crop_size=crop_sizes[target]) for target in args.target]
-
-    val_transforms = [get_val_transform(args.val_resizing, resize_size=args.resize_size,
-                                        norm_mean=args.norm_mean, norm_std=args.norm_std,
-                                        crop_size=360) for target in args.target]
+    train_source_transforms = [get_train_transform(norm_mean=norm_means[source], norm_std=norm_stds[source], crop_size=crop_sizes[source]) for source in args.source]
+    train_target_transforms = [get_train_transform(norm_mean=norm_means[target], norm_std=norm_stds[target], crop_size=crop_sizes[target]) for target in args.target]
+    val_transforms = [get_val_transform(norm_mean=norm_means[target], norm_std=norm_stds[target], crop_size=crop_sizes[target]) for target in args.target]
 
     print("train_source_transforms: ", train_source_transforms)
     print("train_target_transforms: ", train_target_transforms)

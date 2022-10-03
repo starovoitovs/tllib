@@ -210,17 +210,10 @@ if __name__ == '__main__':
                              ' (default: Office31)')
     parser.add_argument('-s', '--source', help='source domain(s)', nargs='+')
     parser.add_argument('-t', '--target', help='target domain(s)', nargs='+')
-    parser.add_argument('--train-resizing', type=str, default='default')
-    parser.add_argument('--val-resizing', type=str, default='default')
-    parser.add_argument('--resize-size', type=int, default=224,
-                        help='the image size after resizing')
     parser.add_argument('--scale', type=float, nargs='+', default=[0.08, 1.0], metavar='PCT',
                         help='Random resize scale (default: 0.08 1.0)')
     parser.add_argument('--ratio', type=float, nargs='+', default=[3. / 4., 4. / 3.], metavar='RATIO',
                         help='Random resize aspect ratio (default: 0.75 1.33)')
-    parser.add_argument('--no-hflip', action='store_true', help='no random horizontal flipping during training')
-    parser.add_argument('--norm-mean', type=float, nargs='+', default=(0.485, 0.456, 0.406), help='normalization mean')
-    parser.add_argument('--norm-std', type=float, nargs='+', default=(0.229, 0.224, 0.225), help='normalization std')
     # model parameters
     parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
                         choices=utils.get_model_names(),

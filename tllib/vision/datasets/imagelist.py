@@ -6,6 +6,7 @@ import os
 import warnings
 from typing import Optional, Callable, Tuple, Any, List, Iterable
 import bisect
+import numpy as np
 
 from torch.utils.data.dataset import Dataset, T_co, IterableDataset
 import torchvision.datasets as datasets
@@ -52,12 +53,12 @@ class ImageList(datasets.VisionDataset):
             return (tuple): (image, target) where target is index of the target class.
         """
         path, target = self.samples[index]
-        img = self.loader(path)
+        image = np.asarray(self.loader(path))
         if self.transform is not None:
-            img = self.transform(img)
+            image = self.transform(image=image)['image']
         if self.target_transform is not None and target is not None:
             target = self.target_transform(target)
-        return img, target
+        return image, target
 
     def __len__(self) -> int:
         return len(self.samples)
